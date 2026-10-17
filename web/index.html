@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Argon2 WASM Benchmark</title>
+  <style>
+    body {
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      font-family: system-ui, sans-serif;
+    }
+
+    #status {
+      padding: 0.75rem;
+      border: 1px solid #888;
+      overflow-wrap: anywhere;
+    }
+
+    pre {
+      padding: 1rem;
+      background: #eee;
+      color: #111;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    button {
+      padding: 0.6rem 1rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Argon2 WASM Benchmark</h1>
+
+  <p id="status">Loading WebAssembly...</p>
+  <button id="start" disabled>Run benchmark</button>
+
+  <div id="results"></div>
+  <pre id="output"></pre>
+
+  <script src="wasm_exec.js"></script>
+  <script>
+    const status = document.getElementById("status");
+    const start = document.getElementById("start");
+    const results = document.getElementById("results");
+    const output = document.getElementById("output");
+
+    const combinations = [
+      [32, 1, 5],
+      [32, 3, 5],
+      [48, 2, 5],
+      [64, 1, 5],
+      [64, 2, 5],
+      [64, 3, 5],
+      [128, 1, 5],
+      [128, 3, 5]
+    ];
+
+    let wasmReady = false;
+    let wasmFailed = false;
+    let running = false;
+
+    function report(message, isError = false) {
+      status.textContent = message;
+      status.style.color = isError ? "red" : "";
+    }
+
+    function append(message, isError = false) {
+      const line = document.createElement("p");
+      line.textContent = message;
+
+      if (isError) {
+        line.style.color = "red";
+      }
+
+      results.appendChild(line);
+      output.textContent += message + "\n";
+    }
+
+    function pause() {
+      return new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    async function initialize() {
+      try {
+        if (typeof Go !== "function") {
+          throw new Error("wasm_exec.js did not load");
+        }
+
+        const go = new Go();
+        const response = await fetch("main.wasm");
+
+        if (!response.ok) {
+          throw new Error(
+            `Could not load main.wasm: HTTP ${response.status}`
+          );
+        }
+
+        const bytes = await response.arrayBuffer();
+        const { instance } = await WebAssembly.instantiate(
+          bytes,
+          go.importObject
+        );
+
+        const runPromise = go.run(instance);
+
+        runPromise.catch(error => {
+          wasmFailed = true;
+          report(`WebAssembly runtime error: ${error}`, true);
+          append(`ERROR: WebAssembly runtime error: ${error}`, true);
+        });
+
+        if (typeof runBench !== "function") {
+          throw new Error("runBench was not registered");
+        }
+
+        wasmReady = true;
+        start.disabled = false;
+        report("WebAssembly ready.");
+      } catch (error) {
+        report(`Initialization failed: ${error}`, true);
+        append(`ERROR: ${error}`, true);
+      }
+    }
+
+    start.addEventListener("click", async () => {
+      if (!wasmReady || wasmFailed || running) {
+        return;
+      }
+
+      running = true;
+      start.disabled = true;
+      results.replaceChildren();
+      output.textContent = "";
+
+      try {
+        for (const [memMiB, passes, timedRuns] of combinations) {
+          if (wasmFailed) {
+            break;
+          }
+
+          const label = `mem=${memMiB}MiB passes=${passes}`;
+
+          report(`Running ${label} with ${timedRuns} timed runs...`);
+          await pause();
+
+          try {
+            const result = runBench(memMiB, passes, timedRuns);
+
+            if (wasmFailed) {
+              break;
+            }
+
+            if (
+              !result ||
+              !Number.isFinite(result.min) ||
+              !Number.isFinite(result.median)
+            ) {
+              const detail =
+                globalThis.lastBenchError || "Unknown benchmark error";
+
+              append(`ERROR: ${label}: ${detail}`, true);
+            } else {
+              append(
+                `${label} min=${result.min}ms median=${result.median}ms`
+              );
+            }
+          } catch (error) {
+            append(`ERROR: ${label}: ${error}`, true);
+          }
+
+          await pause();
+        }
+
+        if (!wasmFailed) {
+          report("Benchmark sequence finished.");
+        }
+      } finally {
+        running = false;
+        start.disabled = !wasmReady || wasmFailed;
+      }
+    });
+
+    initialize();
+  </script>
+</body>
+</html>

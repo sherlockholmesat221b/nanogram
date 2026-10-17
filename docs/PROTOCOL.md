@@ -1,4 +1,4 @@
-t# Protocol (draft)
+# Protocol (draft)
 
 Part 1: registration. Part 2: login. Key wrapping comes after these are agreed.
 
@@ -138,3 +138,29 @@ Pin one exact version in go.mod. The API changed between 0.9 and 0.10 (SetKeyMat
 - Whether KE2 for a fake record has the same length as for a real one.
 - Where the client reads the server identity and what exactly goes into ServerIdentity.
 
+## Argon2id measurements (first round)
+
+Browser (WASM, threads 1), median of 3, on a Moto E7 (the slowest device we have):
+32 MiB: 1 pass 512 ms, 3 passes 1512 ms
+64 MiB: 1 pass 1018 ms, 3 passes 3027 ms
+128 MiB: 1 pass 2108 ms, 3 passes 6373 ms
+
+Cost is about 16 ms per MiB per pass in the browser. Native CLI numbers were noisy (128 MiB, 1 pass came out faster than 64 MiB, 1 pass) and are not used. 128 MiB ran without crashing on this slow, low-RAM phone, so faster devices have room. Newer phones should be quicker.
+
+Rules that follow:
+- Parallelism is 1 on every client. The Argon2 parameters (memory, passes, parallelism) are part of the output, so the CLI and the browser must use identical values or they derive different keys. Go's WASM build is single threaded anyway.
+- The stretching runs in a Web Worker in the real browser client, so the page does not freeze for seconds.
+- The parameters are written into a versioned config. To raise them later, the client re-registers its record with the new values after a successful login.
+- Parameters are not final. Proposed: 64 MiB, 2 passes, parallelism 1 (memory, passes and parallelism are all fixed in the versioned config).
+
+Second round, same Moto E7, 5 timed runs, min / median:
+32 MiB, 1 pass: 523 / 528 ms
+32 MiB, 3 passes: 1554 / 1555 ms
+48 MiB, 2 passes: 1532 / 1534 ms
+64 MiB, 1 pass: 1024 / 1048 ms
+64 MiB, 2 passes: 2020 / 2071 ms
+64 MiB, 3 passes: 3073 / 3088 ms
+128 MiB, 1 pass: 2086 / 2112 ms
+128 MiB, 3 passes: tab froze for over 90 s, no result (the earlier 3-run test finished in 6.4 s, so it is probably heat, battery saver or memory pressure after a long run, not checked).
+
+Min and median agree within a few percent, so the timings are stable. The page ran everything on the main thread and froze, which confirms the Web Worker rule. Also, Go's WASM memory is not returned to the browser while the module lives, so the worker should be created for the stretch and then terminated.
