@@ -27,6 +27,7 @@ Working name: nanogram (may change). Nothing here is final until listed under "D
 - Availability. The server can delete everything or go dark. We detect it and allow encrypted exports.
 - Live malware on the device. We shorten sessions, lock fast and wipe keys from memory, that's all.
 - Metadata. The server sees who talks to whom and when. Padding message sizes and using Tor helps. No fake data.
+- Post-quantum protection for the login handshake and for signatures. Stored data uses random 256-bit symmetric keys and ML-KEM. OPAQUE (login) is built on elliptic curves and has no standard post-quantum version yet, as far as we know. Signing keys are Ed25519 for now.
 - Forward secrecy in v1. A stolen password exposes history.
 - Deletion from old backups or from the other person's copy.
 

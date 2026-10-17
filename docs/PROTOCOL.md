@@ -149,6 +149,8 @@ Pin one exact version in go.mod. The API changed between 0.9 and 0.10 (SetKeyMat
 
 Everything in this part happens on the client. The server only stores the blobs.
 
+Status: password change is decided (two phases, in v1). The cipher (XChaCha20-Poly1305 proposed) and the recovery credential (option 1 proposed) are not yet decided.
+
 ### Keys
 
 - export_key: comes out of OPAQUE login or registration, never leaves the client.
@@ -192,7 +194,7 @@ No signatures here: only someone with the keys can make a valid blob, and the se
 
 Server has to know a lost-password request comes from someone who holds the recovery key, without ever seeing it. Option 1: store a second OPAQUE record whose secret is the recovery key. Reuses code we already test, needs a kind column on opaque_records. Option 2: store a signing public key derived from the recovery key and check a signature on a server nonce. Needs no second OPAQUE state machine but adds a new step. Leaning to option 1.
 
-### Password change (not yet decided)
+### Password change (decided for v1)
 
 1. User logs in, fetches the kek blob, decrypts KEK with the old wrap_key.
 2. Client runs a new OPAQUE registration with the new password, gets a new wrap_key, makes kek blob version n+1.
