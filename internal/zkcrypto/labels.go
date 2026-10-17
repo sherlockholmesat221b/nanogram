@@ -1,0 +1,8 @@
+package zkcrypto
+
+// These strings are part of key derivation and must never change once real users exist.
+const (
+	LabelWrap     = "zkc/v1/wrap"
+	LabelRecovery = "zkc/v1/recovery"
+	LabelRequest  = "zkc/v1/request"
+)
