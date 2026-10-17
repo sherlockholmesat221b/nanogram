@@ -1,4 +1,3 @@
-
 package auth
 
 import (
@@ -144,7 +143,7 @@ func loginTestUser(t *testing.T, conf *opaque.Configuration, record *opaque.Clie
 }
 
 func TestOpaqueRoundTrip(t *testing.T) {
-	conf := opaque.DefaultConfiguration()
+	conf := NewConfiguration()
 	keys := newTestServerKeys(conf)
 	record, registrationExportKey := registerTestUser(t, conf, testPassword, keys)
 
@@ -164,8 +163,51 @@ func TestOpaqueRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpaqueContextBinding(t *testing.T) {
+	registrationConf := NewConfiguration()
+	keys := newTestServerKeys(registrationConf)
+	record, _ := registerTestUser(t, registrationConf, testPassword, keys)
+
+	// The client retains the configured context; the server uses the default.
+	clientConf := NewConfiguration()
+	serverConf := opaque.DefaultConfiguration()
+
+	client, err := clientConf.Client()
+	if err != nil {
+		t.Fatalf("create login client: %v", err)
+	}
+
+	server := newTestServer(t, serverConf, keys)
+	request := client.LoginInit(testPassword)
+	serverRequest, err := server.Deserialize.KE1(request.Serialize())
+	if err != nil {
+		t.Fatalf("deserialize KE1: %v", err)
+	}
+
+	response, err := server.LoginInit(serverRequest, record)
+	if err != nil {
+		t.Fatalf("server LoginInit: %v", err)
+	}
+
+	clientResponse, err := client.Deserialize.KE2(response.Serialize())
+	if err != nil {
+		t.Fatalf("deserialize KE2: %v", err)
+	}
+
+	_, _, err = client.LoginFinish(
+		clientResponse,
+		opaque.ClientLoginFinishOptions{
+			ClientIdentity: testClientID,
+			ServerIdentity: testServerID,
+		},
+	)
+	if err == nil {
+		t.Fatal("LoginFinish succeeded with mismatched OPAQUE contexts")
+	}
+}
+
 func TestOpaqueWrongPassword(t *testing.T) {
-	conf := opaque.DefaultConfiguration()
+	conf := NewConfiguration()
 	keys := newTestServerKeys(conf)
 	record, _ := registerTestUser(t, conf, testPassword, keys)
 
@@ -178,7 +220,7 @@ func TestOpaqueWrongPassword(t *testing.T) {
 }
 
 func TestOpaqueUnknownUserFakeResponse(t *testing.T) {
-	conf := opaque.DefaultConfiguration()
+	conf := NewConfiguration()
 	keys := newTestServerKeys(conf)
 	record, _ := registerTestUser(t, conf, testPassword, keys)
 
@@ -251,7 +293,7 @@ func TestOpaqueUnknownUserFakeResponse(t *testing.T) {
 func TestOpaqueMismatchedServerKeys(t *testing.T) {
 	for _, mismatch := range []string{"secret key", "OPRF seed"} {
 		t.Run(mismatch, func(t *testing.T) {
-			conf := opaque.DefaultConfiguration()
+			conf := NewConfiguration()
 			registrationKeys := newTestServerKeys(conf)
 			record, _ := registerTestUser(t, conf, testPassword, registrationKeys)
 
@@ -272,4 +314,3 @@ func TestOpaqueMismatchedServerKeys(t *testing.T) {
 		})
 	}
 }
-

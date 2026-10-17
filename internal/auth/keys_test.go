@@ -103,3 +103,44 @@ func TestLoadServerKeysRejectsUnsupportedVersion(t *testing.T) {
 		t.Fatal("LoadServerKeys() accepted version 2")
 	}
 }
+
+func TestLoadServerKeysRejectsDirectory(t *testing.T) {
+	path := t.TempDir()
+
+	if _, err := LoadServerKeys(path); err == nil {
+		t.Fatal("LoadServerKeys() accepted a directory")
+	}
+}
+
+func TestLoadServerKeysRejectsEmptyOPRFSeed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server-keys.json")
+
+	data := []byte(
+		`{"version":1,"private_key":"AQ==","public_key":"Ag==","oprf_seed":""}`,
+	)
+
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	if _, err := LoadServerKeys(path); err == nil {
+		t.Fatal("LoadServerKeys() accepted an empty OPRF seed")
+	}
+}
+
+func TestLoadServerKeysRejects0640Permissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server-keys.json")
+	keys := GenerateServerKeys(NewConfiguration())
+
+	if err := keys.Save(path); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatalf("Chmod() error: %v", err)
+	}
+
+	if _, err := LoadServerKeys(path); err == nil {
+		t.Fatal("LoadServerKeys() accepted a file with mode 0640")
+	}
+}
