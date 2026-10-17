@@ -130,7 +130,8 @@ Pin one exact version in go.mod. The API changed between 0.9 and 0.10 (SetKeyMat
 - Fake record: conf.GetFakeRecord(credential id). Build it once, pass it to LoginInit when the user is missing.
 - Per-login server state: Server keeps it inside the object. SerializeState and SetAKEState let us store it under login_id between request 1 and 3.
 - The server's public key comes back to the client in the registration response, so the client can pin it there.
-- Pinning at login: the envelope is bound to the server key chosen at registration, so a different key should already fail to open it. Confirm with a test before relying on it.
+- Pinning at login: the envelope is bound to the server key chosen at registration, so a different key fails to open it. Confirmed by TestOpaqueMismatchedServerKeys (secret key and OPRF seed cases).
+- Pinned versions that work together: bytemare/opaque v0.10.0 with bytemare/ksf v0.4.0. ksf v0.5.0 does not compile with opaque v0.10.0, and its Harden signature differs from v0.4.0. The ksf defaults above were read from a different version than the one in use, so they must be re-checked with the golden test.
 
 ## Key stretching in bytemare/ksf (checked)
 
