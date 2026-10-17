@@ -1,2 +1,4 @@
 web/main.wasm
 wasm_exec.js
+server-keys.json
+keys/
