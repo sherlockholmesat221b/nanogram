@@ -144,3 +144,75 @@ Pin one exact version in go.mod. The API changed between 0.9 and 0.10 (SetKeyMat
 
 - Whether KE2 for a fake record has the same length as for a real one.
 - Where the client reads the server identity and what exactly goes into ServerIdentity.
+
+## Part 3: key wrapping (draft, nothing here is decided yet)
+
+Everything in this part happens on the client. The server only stores the blobs.
+
+### Keys
+
+- export_key: comes out of OPAQUE login or registration, never leaves the client.
+- wrap_key = HKDF-SHA-256(export_key, salt empty, info LabelWrap), 32 bytes. Derived on every login, never stored.
+- KEK: random 32 bytes, made once at registration. The account key. Everything else is wrapped under it.
+- MEK: random 32 bytes, encrypts the user's own stored history. Versioned, so a new one per period can be added later (forward secrecy, v2).
+- Identity seeds: random seeds for the ML-KEM key pair and the signing key pair. Only the seeds are stored, the keys are regenerated from them. Public keys are stored in clear.
+- recovery_key: random 32 bytes, shown once to the user, never sent. recovery_wrap_key = HKDF-SHA-256(recovery_key, info LabelRecovery).
+
+### What the server stores (table key_blobs)
+
+- kek blob: KEK under wrap_key
+- recovery blob: KEK under recovery_wrap_key
+- mek blob: MEK under KEK
+- identity blob: identity seeds under KEK
+
+### Blob format
+
+[1 byte format version][24 byte random nonce][ciphertext and tag], using XChaCha20-Poly1305.
+
+The associated data binds a blob to where it belongs:
+"zkc/v1/blob" | user_id (16) | kind (1 byte) | version (8 bytes, big endian) | prev_hash (32)
+
+So the server cannot move a blob to another user, another kind or another version without the tag failing.
+
+### Hash chain
+
+hash_n = SHA-256(associated data of blob n | blob n). The first version has prev_hash of 32 zero bytes. The client remembers the newest version and hash it has seen for each kind. If the server later returns an older version or a different hash, the client warns. A brand new device has nothing to compare, so it cannot detect rollback. That limit stays in the threat model.
+
+No signatures here: only someone with the keys can make a valid blob, and the server has none of them. Signatures matter later for public keys and messages.
+
+### Registration, client side
+
+1. Run OPAQUE registration, get the record and export_key.
+2. Make KEK, MEK, identity seeds, recovery_key.
+3. Build the four blobs, check each one decrypts again.
+4. Show the recovery key once, ask the user to confirm they saved it.
+5. Send record, blobs, public keys and the recovery credential (below) in the finish request.
+
+### Recovery credential (not yet decided)
+
+Server has to know a lost-password request comes from someone who holds the recovery key, without ever seeing it. Option 1: store a second OPAQUE record whose secret is the recovery key. Reuses code we already test, needs a kind column on opaque_records. Option 2: store a signing public key derived from the recovery key and check a signature on a server nonce. Needs no second OPAQUE state machine but adds a new step. Leaning to option 1.
+
+### Password change (not yet decided)
+
+1. User logs in, fetches the kek blob, decrypts KEK with the old wrap_key.
+2. Client runs a new OPAQUE registration with the new password, gets a new wrap_key, makes kek blob version n+1.
+3. Client decrypts the new blob with the new wrap_key to check it.
+4. Server stores the new record and blob as pending, only if the client says it saw version n (compare and swap, stops two devices racing).
+5. The client logs in with the new password. Only then the server makes the pending record current. If this never happens within a set time, the old record stays.
+
+Step 5 is what stops a buggy or hostile client from locking the user out with a record for the wrong password.
+
+### Recovery flow
+
+Login with the recovery credential, fetch the recovery blob, decrypt KEK, set a new password as in the password change above (steps 2 to 5).
+
+### Schema changes this needs
+
+- opaque_records: add kind ('password' or 'recovery') and a pending flag, primary key (user_id, kind).
+- key_blobs: first version has prev_hash of 32 zero bytes. Use DATETIME in UTC instead of TIMESTAMP. Add ON DELETE CASCADE.
+- New table for public keys (user_id, kind, key, version).
+
+### Needs checking
+
+- Go version on every machine: crypto/mlkem needs Go 1.24 or newer.
+- Whether ML-KEM keys can be restored from the stored seed with the standard library.
