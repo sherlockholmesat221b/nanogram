@@ -6,4 +6,5 @@ const (
 	LabelRecovery      = "zkc/v1/recovery"
 	LabelRequest       = "zkc/v1/request"
 	LabelOpaqueContext = "zkc/v1/opaque"
+	LabelFakeUser      = "zkc/v1/fake-user"
 )

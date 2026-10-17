@@ -9,7 +9,7 @@ import (
 
 var (
 	serverTestPassword = []byte("correct horse battery staple")
-	serverTestUserID   = []byte("user-001")
+	serverTestUserID   = []byte("user-id-00000001")
 	serverTestUsername = "alice"
 )
 
@@ -109,6 +109,34 @@ func finishClientLogin(
 	return ke3.Serialize(), nil
 }
 
+func makeTestKE1(t *testing.T, conf *opaque.Configuration) []byte {
+	t.Helper()
+
+	client, err := conf.Client()
+	if err != nil {
+		t.Fatalf("create KE1 client: %v", err)
+	}
+
+	return client.LoginInit(serverTestPassword).Serialize()
+}
+
+func assertSameOPRFEvaluation(t *testing.T, first, second []byte) {
+	t.Helper()
+
+	const evaluatedElementSize = 32
+
+	if len(first) < evaluatedElementSize || len(second) < evaluatedElementSize {
+		t.Fatalf(
+			"KE2 too short to contain the evaluated element: first=%d second=%d",
+			len(first), len(second),
+		)
+	}
+
+	if !bytes.Equal(first[:evaluatedElementSize], second[:evaluatedElementSize]) {
+		t.Fatal("OPRF evaluated elements differ for repeated equivalent requests")
+	}
+}
+
 func TestServerRegistrationAndLogin(t *testing.T) {
 	conf := NewConfiguration()
 	keys := GenerateServerKeys(conf)
@@ -194,5 +222,92 @@ func TestNormalizeRecordRejectsTruncatedBytes(t *testing.T) {
 
 	if _, err := server.NormalizeRecord([]byte{0x01, 0x02}); err == nil {
 		t.Fatal("NormalizeRecord accepted a truncated registration record")
+	}
+}
+
+func TestRegistrationResponseRejects15ByteUserID(t *testing.T) {
+	conf := NewConfiguration()
+	keys := GenerateServerKeys(conf)
+	client, err := conf.Client()
+	if err != nil {
+		t.Fatalf("create registration client: %v", err)
+	}
+
+	request := client.RegistrationInit(serverTestPassword)
+	server := NewServer(keys)
+
+	if _, err := server.RegistrationResponse(request.Serialize(), make([]byte, 15)); err == nil {
+		t.Fatal("RegistrationResponse accepted a 15-byte user ID")
+	}
+}
+
+func TestUnknownUsernameOPRFEvaluationIsDeterministic(t *testing.T) {
+	conf := NewConfiguration()
+	keys := GenerateServerKeys(conf)
+	server := NewServer(keys)
+	ke1 := makeTestKE1(t, conf)
+
+	first, _, err := server.LoginStart(ke1, "unknown-user", nil)
+	if err != nil {
+		t.Fatalf("first LoginStart: %v", err)
+	}
+
+	second, _, err := server.LoginStart(ke1, "unknown-user", nil)
+	if err != nil {
+		t.Fatalf("second LoginStart: %v", err)
+	}
+
+	assertSameOPRFEvaluation(t, first, second)
+}
+
+func TestRealUserOPRFEvaluationIsDeterministic(t *testing.T) {
+	conf := NewConfiguration()
+	keys := GenerateServerKeys(conf)
+	user := registerStoredUser(
+		t, conf, keys, serverTestUserID, serverTestPassword,
+	)
+	server := NewServer(keys)
+	ke1 := makeTestKE1(t, conf)
+
+	first, _, err := server.LoginStart(ke1, serverTestUsername, user)
+	if err != nil {
+		t.Fatalf("first LoginStart: %v", err)
+	}
+
+	second, _, err := server.LoginStart(ke1, serverTestUsername, user)
+	if err != nil {
+		t.Fatalf("second LoginStart: %v", err)
+	}
+
+	assertSameOPRFEvaluation(t, first, second)
+}
+
+func TestDifferentUnknownUsernamesHaveDifferentOPRFEvaluations(t *testing.T) {
+	conf := NewConfiguration()
+	keys := GenerateServerKeys(conf)
+	server := NewServer(keys)
+	ke1 := makeTestKE1(t, conf)
+
+	first, _, err := server.LoginStart(ke1, "unknown-user-a", nil)
+	if err != nil {
+		t.Fatalf("first LoginStart: %v", err)
+	}
+
+	second, _, err := server.LoginStart(ke1, "unknown-user-b", nil)
+	if err != nil {
+		t.Fatalf("second LoginStart: %v", err)
+	}
+
+	const evaluatedElementSize = 32
+
+	if len(first) < evaluatedElementSize || len(second) < evaluatedElementSize {
+		t.Fatalf(
+			"KE2 too short to contain the evaluated element: first=%d second=%d",
+			len(first), len(second),
+		)
+	}
+
+	if bytes.Equal(first[:evaluatedElementSize], second[:evaluatedElementSize]) {
+		t.Fatal("different unknown usernames produced the same OPRF evaluated element")
 	}
 }
