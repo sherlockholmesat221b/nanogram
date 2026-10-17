@@ -1,4 +1,4 @@
-# Protocol (draft)
+t# Protocol (draft)
 
 Part 1: registration. Part 2: login. Key wrapping comes after these are agreed.
 
@@ -119,8 +119,22 @@ First time a client talks to a server it stores the server's public key. After t
 - Registration cannot hide whether a username exists. That is accepted.
 - login_state storage: memory is fine for one server process. More than one process needs a shared store.
 
-## To check in the library docs before coding
+## Library notes (bytemare/opaque, read from pkg.go.dev)
 
-- How the fake record is created and whether the reply sizes match.
-- Whether the client can read the server public key before finishing login.
-- Which fields of the credential identifier and server identity go into the transcript.
+Pin one exact version in go.mod. The API changed between 0.9 and 0.10 (SetKeyMaterial is new in 0.10), so examples found online may not match.
+
+- DefaultConfiguration is ristretto255 + SHA-512 + Argon2id. We take that as the ciphersuite.
+- Configuration has a Context field. Set it to a fixed zkc constant. A configuration must never change for existing users.
+- Client: RegistrationInit, RegistrationFinalize (returns record and export_key), LoginInit, LoginFinish (returns ke3 and export_key), SessionKey.
+- Server: SetKeyMaterial (server identity, secret key, public key, oprf seed), RegistrationResponse (takes the user's credential identifier, our user_id), LoginInit, LoginFinish, SessionKey.
+- Fake record: conf.GetFakeRecord(credential id). Build it once, pass it to LoginInit when the user is missing.
+- Per-login server state: Server keeps it inside the object. SerializeState and SetAKEState let us store it under login_id between request 1 and 3.
+- The server's public key comes back to the client in the registration response, so the client can pin it there.
+- Pinning at login: the envelope is bound to the server key chosen at registration, so a different key should already fail to open it. Confirm with a test before relying on it.
+
+## Still to check
+
+- Argon2id cost parameters live in github.com/bytemare/ksf. Not read yet. Need to know if they can be set, and what the defaults are. If they are fixed, we need our own KSF or a fork.
+- Whether KE2 for a fake record has the same length as for a real one.
+- Where the client reads the server identity and what exactly goes into ServerIdentity.
+
