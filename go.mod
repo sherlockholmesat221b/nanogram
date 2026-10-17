@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/bytemare/ksf v0.4.0
 	github.com/bytemare/opaque v0.10.0
+	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.58.0
 )
 
