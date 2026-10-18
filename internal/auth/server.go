@@ -120,9 +120,7 @@ func (s *Server) LoginStart(
 	} else {
 		// A deterministic fake ID keeps the OPRF response consistent for repeated
 		// requests for the same unknown username.
-		mac := hmac.New(sha256.New, s.keys.OPRFSeed)
-		_, _ = mac.Write([]byte(zkcrypto.LabelFakeUser + username))
-		fakeID := mac.Sum(nil)[:16]
+		fakeID := s.FakeUserID(username)
 
 		record, err = s.conf.GetFakeRecord(fakeID)
 		if err != nil {
@@ -168,4 +166,11 @@ func (s *Server) LoginFinish(state, ke3 []byte) ([]byte, error) {
 	}
 
 	return server.SessionKey(), nil
+}
+
+// FakeUserID derives a deterministic 16-byte identifier for an unknown username.
+func (s *Server) FakeUserID(username string) []byte {
+	mac := hmac.New(sha256.New, s.keys.OPRFSeed)
+	_, _ = mac.Write([]byte(zkcrypto.LabelFakeUser + username))
+	return mac.Sum(nil)[:16]
 }
