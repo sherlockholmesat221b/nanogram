@@ -3,6 +3,7 @@ package memstore
 import (
 	"bytes"
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -26,6 +27,17 @@ type blobKey struct {
 	version uint64
 }
 
+type pubKeyKey struct {
+	userID  string
+	kind    string
+	version uint32
+}
+
+type pendingExpiry struct {
+	userID string
+	until  time.Time
+}
+
 type MemStore struct {
 	mu           sync.Mutex
 	usersByName  map[string]store.User
@@ -33,6 +45,8 @@ type MemStore struct {
 	reservations map[string]reservation
 	opaque       map[opaqueKey]store.OpaqueRecord
 	blobs        map[blobKey]store.Blob
+	pubKeys      map[pubKeyKey]store.PublicKey
+	expiries     map[string]time.Time // userID string -> pending expiry time
 	loginStates  map[[32]byte]store.LoginState
 	sessions     map[[32]byte]store.Session
 }
@@ -44,6 +58,8 @@ func New() *MemStore {
 		reservations: make(map[string]reservation),
 		opaque:       make(map[opaqueKey]store.OpaqueRecord),
 		blobs:        make(map[blobKey]store.Blob),
+		pubKeys:      make(map[pubKeyKey]store.PublicKey),
+		expiries:     make(map[string]time.Time),
 		loginStates:  make(map[[32]byte]store.LoginState),
 		sessions:     make(map[[32]byte]store.Session),
 	}
@@ -62,7 +78,6 @@ func clone(b []byte) []byte {
 	if b == nil {
 		return nil
 	}
-
 	out := make([]byte, len(b))
 	copy(out, b)
 	return out
@@ -83,6 +98,12 @@ func cloneBlob(b store.Blob) store.Blob {
 	b.UserID = clone(b.UserID)
 	b.Data = clone(b.Data)
 	return b
+}
+
+func clonePublicKey(p store.PublicKey) store.PublicKey {
+	p.UserID = clone(p.UserID)
+	p.Key = clone(p.Key)
+	return p
 }
 
 func cloneSession(s store.Session) store.Session {
@@ -153,7 +174,7 @@ func (m *MemStore) CreateUser(
 		return store.ErrConflict
 	}
 
-	// Validate all input before mutating any stored state.
+	// Validate all input before mutating any stored state
 	seenOpaque := make(map[opaqueKey]struct{}, len(records))
 	for _, rec := range records {
 		if !bytes.Equal(rec.UserID, u.ID) ||
@@ -304,7 +325,10 @@ func (m *MemStore) CurrentBlob(
 	return cloneBlob(best), nil
 }
 
-func (m *MemStore) hasPendingPasswordChange(userID []byte) bool {
+func (m *MemStore) hasPendingPasswordChange(
+	userID []byte,
+	now time.Time,
+) bool {
 	id := string(userID)
 
 	if _, ok := m.opaque[opaqueKey{
@@ -312,13 +336,21 @@ func (m *MemStore) hasPendingPasswordChange(userID []byte) bool {
 		kind:    "password",
 		pending: true,
 	}]; ok {
-		return true
+		until, exists := m.expiries[id]
+		if exists && until.After(now) {
+			return true
+		}
 	}
 
 	for key, b := range m.blobs {
-		if key.userID == id &&
-			key.kind == store.BlobKindKEK &&
-			b.Pending {
+		if key.userID != id ||
+			key.kind != store.BlobKindKEK ||
+			!b.Pending {
+			continue
+		}
+
+		until, exists := m.expiries[id]
+		if exists && until.After(now) {
 			return true
 		}
 	}
@@ -332,6 +364,7 @@ func (m *MemStore) BeginPasswordChange(
 	expectedKEKVersion uint64,
 	rec store.OpaqueRecord,
 	kek store.Blob,
+	now, until time.Time,
 ) error {
 	if err := checkContext(ctx); err != nil {
 		return err
@@ -340,15 +373,31 @@ func (m *MemStore) BeginPasswordChange(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.hasPendingPasswordChange(userID) {
+	if m.hasPendingPasswordChange(userID, now) {
 		return store.ErrConflict
 	}
+
+	id := string(userID)
+
+	delete(m.opaque, opaqueKey{
+		userID:  id,
+		kind:    "password",
+		pending: true,
+	})
+	for key, b := range m.blobs {
+		if key.userID == id &&
+			key.kind == store.BlobKindKEK &&
+			b.Pending {
+			delete(m.blobs, key)
+		}
+	}
+	delete(m.expiries, id)
 
 	var current store.Blob
 	found := false
 
 	for key, b := range m.blobs {
-		if key.userID != string(userID) ||
+		if key.userID != id ||
 			key.kind != store.BlobKindKEK ||
 			b.Pending {
 			continue
@@ -379,12 +428,12 @@ func (m *MemStore) BeginPasswordChange(
 	}
 
 	opaqueKey := opaqueKey{
-		userID:  string(userID),
+		userID:  id,
 		kind:    "password",
 		pending: true,
 	}
 	newBlobKey := blobKey{
-		userID:  string(userID),
+		userID:  id,
 		kind:    kek.Kind,
 		version: kek.Version,
 	}
@@ -398,6 +447,7 @@ func (m *MemStore) BeginPasswordChange(
 
 	m.opaque[opaqueKey] = cloneOpaque(rec)
 	m.blobs[newBlobKey] = cloneBlob(kek)
+	m.expiries[id] = until
 
 	return nil
 }
@@ -450,6 +500,7 @@ func (m *MemStore) CommitPasswordChange(
 	pendingBlob := m.blobs[pendingBlobKey]
 	pendingBlob.Pending = false
 	m.blobs[pendingBlobKey] = cloneBlob(pendingBlob)
+	delete(m.expiries, id)
 
 	return nil
 }
@@ -492,7 +543,237 @@ func (m *MemStore) AbortPasswordChange(
 		return store.ErrNotFound
 	}
 
+	delete(m.expiries, id)
 	return nil
+}
+
+func (m *MemStore) AppendBlob(
+	ctx context.Context,
+	b store.Blob,
+) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id := string(b.UserID)
+	if _, exists := m.usersByID[id]; !exists {
+		return store.ErrNotFound
+	}
+
+	if b.Pending {
+		return store.ErrConflict
+	}
+
+	if b.Kind == store.BlobKindKEK ||
+		b.Kind == store.BlobKindRecovery {
+		return store.ErrConflict
+	}
+
+	var maxVer uint64
+	hasAny := false
+
+	for key, existing := range m.blobs {
+		if key.userID == id && key.kind == b.Kind && !existing.Pending {
+			hasAny = true
+			if existing.Version > maxVer {
+				maxVer = existing.Version
+			}
+		}
+	}
+
+	expectedVersion := uint64(1)
+	if hasAny {
+		expectedVersion = maxVer + 1
+	}
+
+	if b.Version != expectedVersion {
+		return store.ErrConflict
+	}
+
+	key := blobKey{
+		userID:  id,
+		kind:    b.Kind,
+		version: b.Version,
+	}
+	if _, exists := m.blobs[key]; exists {
+		return store.ErrConflict
+	}
+
+	m.blobs[key] = cloneBlob(b)
+	return nil
+}
+
+func (m *MemStore) ReplaceRecovery(
+	ctx context.Context,
+	userID []byte,
+	rec store.OpaqueRecord,
+	blob store.Blob,
+) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id := string(userID)
+	if _, exists := m.usersByID[id]; !exists {
+		return store.ErrNotFound
+	}
+
+	if rec.Pending || blob.Pending || rec.Kind != "recovery" || blob.Kind != store.BlobKindRecovery {
+		return store.ErrConflict
+	}
+	if !bytes.Equal(rec.UserID, userID) || !bytes.Equal(blob.UserID, userID) {
+		return store.ErrConflict
+	}
+
+	var maxVer uint64
+	hasAny := false
+	for key, existing := range m.blobs {
+		if key.userID == id && key.kind == store.BlobKindRecovery && !existing.Pending {
+			hasAny = true
+			if existing.Version > maxVer {
+				maxVer = existing.Version
+			}
+		}
+	}
+
+	expectedVersion := uint64(1)
+	if hasAny {
+		expectedVersion = maxVer + 1
+	}
+
+	if blob.Version != expectedVersion {
+		return store.ErrConflict
+	}
+
+	// Delete old current recovery opaque record if any
+	oldOpaqueKey := opaqueKey{
+		userID:  id,
+		kind:    "recovery",
+		pending: false,
+	}
+	delete(m.opaque, oldOpaqueKey)
+
+	newBlobKey := blobKey{
+		userID:  id,
+		kind:    blob.Kind,
+		version: blob.Version,
+	}
+	if _, exists := m.blobs[newBlobKey]; exists {
+		return store.ErrConflict
+	}
+
+	m.opaque[oldOpaqueKey] = cloneOpaque(rec)
+	m.blobs[newBlobKey] = cloneBlob(blob)
+	return nil
+}
+
+func (m *MemStore) DeleteRecovery(
+	ctx context.Context,
+	userID []byte,
+) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id := string(userID)
+	oldOpaqueKey := opaqueKey{
+		userID:  id,
+		kind:    "recovery",
+		pending: false,
+	}
+
+	if _, ok := m.opaque[oldOpaqueKey]; !ok {
+		return store.ErrNotFound
+	}
+
+	delete(m.opaque, oldOpaqueKey)
+	for key := range m.blobs {
+		if key.userID == id && key.kind == store.BlobKindRecovery {
+			delete(m.blobs, key)
+		}
+	}
+
+	return nil
+}
+
+func (m *MemStore) PutPublicKey(
+	ctx context.Context,
+	userID []byte,
+	kind string,
+	version uint32,
+	key []byte,
+) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id := string(userID)
+	if _, exists := m.usersByID[id]; !exists {
+		return store.ErrNotFound
+	}
+
+	pkKey := pubKeyKey{
+		userID:  id,
+		kind:    kind,
+		version: version,
+	}
+
+	if _, exists := m.pubKeys[pkKey]; exists {
+		return store.ErrConflict
+	}
+
+	m.pubKeys[pkKey] = store.PublicKey{
+		UserID:    clone(userID),
+		Kind:      kind,
+		Version:   version,
+		Key:       clone(key),
+		CreatedAt: time.Now(),
+	}
+	return nil
+}
+
+func (m *MemStore) PublicKeys(
+	ctx context.Context,
+	userID []byte,
+	kind string,
+) ([]store.PublicKey, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id := string(userID)
+	var list []store.PublicKey
+
+	for pkKey, pk := range m.pubKeys {
+		if pkKey.userID == id && pkKey.kind == kind {
+			list = append(list, clonePublicKey(pk))
+		}
+	}
+
+	if len(list) == 0 {
+		return nil, store.ErrNotFound
+	}
+
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].Version < list[j].Version
+	})
+
+	return list, nil
 }
 
 func (m *MemStore) PutLoginState(
@@ -531,7 +812,7 @@ func (m *MemStore) TakeLoginState(
 		return store.LoginState{}, store.ErrNotFound
 	}
 
-	// Delete before returning, including when the state has expired.
+	// Delete before returning, including when the state has expired
 	delete(m.loginStates, idHash)
 
 	if !ls.ExpiresAt.After(now) {
@@ -640,6 +921,18 @@ func (m *MemStore) DeleteExpired(
 	for username, r := range m.reservations {
 		if !r.expires.After(now) {
 			delete(m.reservations, username)
+		}
+	}
+
+	for id, until := range m.expiries {
+		if !until.After(now) {
+			delete(m.expiries, id)
+			delete(m.opaque, opaqueKey{userID: id, kind: "password", pending: true})
+			for bKey, b := range m.blobs {
+				if bKey.userID == id && bKey.kind == store.BlobKindKEK && b.Pending {
+					delete(m.blobs, bKey)
+				}
+			}
 		}
 	}
 

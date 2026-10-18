@@ -14,10 +14,7 @@ CREATE TABLE username_reservations (
     user_id BINARY(16) NOT NULL,
     expires_at DATETIME NOT NULL,
     PRIMARY KEY (username),
-    KEY idx_username_reservations_expires_at (expires_at),
-    CONSTRAINT fk_username_reservations_user
-        FOREIGN KEY (user_id) REFERENCES users (id)
-        ON DELETE CASCADE
+    KEY idx_username_reservations_expires_at (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- OPAQUE records separated by credential kind and pending status.
@@ -25,6 +22,7 @@ CREATE TABLE opaque_records (
     user_id BINARY(16) NOT NULL,
     kind ENUM('password', 'recovery') NOT NULL,
     pending TINYINT(1) NOT NULL DEFAULT 0,
+    pending_expires_at DATETIME NULL,
     record VARBINARY(1024) NOT NULL,
     ksf_version SMALLINT NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -42,6 +40,7 @@ CREATE TABLE key_blobs (
     prev_hash BINARY(32) NOT NULL,
     blob VARBINARY(4096) NOT NULL,
     pending TINYINT(1) NOT NULL DEFAULT 0,
+    pending_expires_at DATETIME NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, kind, version),
     CONSTRAINT fk_key_blobs_user
