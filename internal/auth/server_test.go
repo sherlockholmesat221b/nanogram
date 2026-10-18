@@ -313,3 +313,20 @@ func TestDifferentUnknownUsernamesHaveDifferentOPRFEvaluations(t *testing.T) {
 		t.Fatal("different unknown usernames produced the same OPRF evaluated element")
 	}
 }
+
+func TestFakeUserIDIs16BytesAndDeterministic(t *testing.T) {
+	server := NewServer(GenerateServerKeys(NewConfiguration()))
+
+	first := server.FakeUserID("unknown-user")
+	second := server.FakeUserID("unknown-user")
+
+	if len(first) != 16 {
+		t.Fatalf("FakeUserID length = %d, want 16", len(first))
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("FakeUserID is not deterministic")
+	}
+	if bytes.Equal(first, server.FakeUserID("another-user")) {
+		t.Fatal("different usernames produced the same fake ID")
+	}
+}
