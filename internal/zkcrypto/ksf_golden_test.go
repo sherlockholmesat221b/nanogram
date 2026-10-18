@@ -1,3 +1,5 @@
+// File: internal/zkcrypto/ksf_golden_test.go
+
 package zkcrypto
 
 import (

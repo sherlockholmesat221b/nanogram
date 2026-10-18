@@ -1,3 +1,5 @@
+// File: cmd/argbench/main.go
+
 package main
 
 import (

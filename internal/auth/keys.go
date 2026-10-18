@@ -1,3 +1,5 @@
+// File: internal/auth/keys.go
+
 package auth
 
 import (

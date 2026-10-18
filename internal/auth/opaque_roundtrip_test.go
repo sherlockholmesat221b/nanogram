@@ -1,3 +1,5 @@
+// File: internal/auth/opaque_roundtrip_test.go
+
 package auth
 
 import (

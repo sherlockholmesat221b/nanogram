@@ -1,3 +1,5 @@
+// File: internal/auth/config.go
+
 package auth
 
 import (

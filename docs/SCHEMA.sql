@@ -1,3 +1,5 @@
+-- File: docs/SCHEMA.sql
+
 -- MariaDB 10.6+, InnoDB, utf8mb4. All DATETIME values are UTC.
 -- Registered user identities.
 CREATE TABLE users (

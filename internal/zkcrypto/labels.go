@@ -1,3 +1,5 @@
+// File: internal/zkcrypto/labels.go
+
 package zkcrypto
 
 // These strings are part of key derivation and must never change once real users exist.
