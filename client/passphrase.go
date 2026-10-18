@@ -55,7 +55,7 @@ func GeneratePassphrase(words int) (string, error) {
 	return strings.Join(selected, " "), nil
 }
 
-// CheckPassphrase validates a BIP39-word passphrase or, when allowed, a sufficiently long custom passphrase.
+// CheckPassphrase checks the passphrase format only; it cannot prove that the words were chosen at random. User interfaces must only offer output from GeneratePassphrase.
 func CheckPassphrase(p string, allowCustom bool) error {
 	normalised := strings.Join(
 		strings.Fields(strings.ToLower(p)),
@@ -64,6 +64,7 @@ func CheckPassphrase(p string, allowCustom bool) error {
 
 	words := strings.Fields(normalised)
 	if len(words) >= minPassphraseWords {
+		distinct := make(map[string]struct{}, len(words))
 		allValid := true
 
 		for _, word := range words {
@@ -71,16 +72,19 @@ func CheckPassphrase(p string, allowCustom bool) error {
 				allValid = false
 				break
 			}
+
+			distinct[word] = struct{}{}
 		}
 
-		if allValid {
+		if allValid && len(distinct) >= minPassphraseWords {
 			return nil
 		}
 	}
 
+	// allowCustom is only a length check; it is weak and must be false in shipped user interfaces.
 	if allowCustom && utf8.RuneCountInString(normalised) >= minCustomPassphraseSize {
 		return nil
 	}
 
-	return errors.New("passphrase must contain at least 8 BIP39 words, or be a custom passphrase of at least 20 characters when custom passphrases are allowed")
+	return errors.New("passphrase must contain at least 8 distinct BIP39 words, or be a custom passphrase of at least 20 characters when custom passphrases are allowed")
 }

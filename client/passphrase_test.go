@@ -68,6 +68,34 @@ func TestCheckPassphraseRejectsSevenWords(t *testing.T) {
 	}
 }
 
+func TestCheckPassphraseRejectsEightCopiesOfOneWord(t *testing.T) {
+	passphrase := strings.TrimSpace(strings.Repeat("abandon ", 8))
+
+	if err := CheckPassphrase(passphrase, false); err == nil {
+		t.Fatal("CheckPassphrase(8 repeated words, false) error = nil, want error")
+	}
+}
+
+func TestCheckPassphraseRejectsNineWordsWithSevenDistinctWords(t *testing.T) {
+	wordList := bip39.GetWordList()
+	words := append([]string(nil), wordList[:7]...)
+	words = append(words, wordList[0], wordList[1])
+	passphrase := strings.Join(words, " ")
+
+	if err := CheckPassphrase(passphrase, false); err == nil {
+		t.Fatal("CheckPassphrase(9 words with 7 distinct words, false) error = nil, want error")
+	}
+}
+
+func TestCheckPassphraseAcceptsEightDistinctWords(t *testing.T) {
+	wordList := bip39.GetWordList()
+	passphrase := strings.Join(wordList[:8], " ")
+
+	if err := CheckPassphrase(passphrase, false); err != nil {
+		t.Fatalf("CheckPassphrase(8 distinct words, false) error = %v", err)
+	}
+}
+
 func TestCheckPassphraseUnknownWord(t *testing.T) {
 	passphrase := "abandon ability able about above absent absorb abstract definitelynotabip39word"
 
