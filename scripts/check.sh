@@ -1,4 +1,6 @@
 #!/bin/sh
+# File: scripts/check.sh
+
 set -eu
 
 cd "$(git rev-parse --show-toplevel)"

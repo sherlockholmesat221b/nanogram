@@ -1,3 +1,5 @@
+// File: cmd/argwasm/main.go
+
 package main
 
 import (

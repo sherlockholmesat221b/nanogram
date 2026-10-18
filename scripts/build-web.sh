@@ -1,4 +1,6 @@
 #!/bin/sh
+# File: scripts/build-web.sh
+
 set -eu
 
 mkdir -p web

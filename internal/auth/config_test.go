@@ -1,3 +1,5 @@
+// File: internal/auth/config_test.go
+
 package auth
 
 import (
