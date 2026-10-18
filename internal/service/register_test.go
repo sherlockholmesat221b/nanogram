@@ -1,3 +1,5 @@
+// File: internal/service/register_test.go
+
 package service
 
 import (
