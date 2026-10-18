@@ -56,6 +56,7 @@ type Session struct {
 	IDHash      [32]byte
 	UserID      []byte
 	Key         []byte
+	Scope       string
 	LastCounter uint64
 	ExpiresAt   time.Time
 }
@@ -81,6 +82,7 @@ type Store interface {
 		u User,
 		records []OpaqueRecord,
 		blobs []Blob,
+		keys []PublicKey,
 		now time.Time,
 	) error
 
@@ -113,6 +115,7 @@ type Store interface {
 	CommitPasswordChange(
 		ctx context.Context,
 		userID []byte,
+		now time.Time,
 	) error
 
 	AbortPasswordChange(
@@ -143,6 +146,7 @@ type Store interface {
 		kind string,
 		version uint32,
 		key []byte,
+		now time.Time,
 	) error
 
 	PublicKeys(

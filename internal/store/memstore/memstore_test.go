@@ -40,21 +40,21 @@ func createUser(t *testing.T, m *MemStore, username string, uid []byte) {
 		Username:  username,
 		CreatedAt: t0,
 	}
+
 	r := store.OpaqueRecord{
-		UserID:     uid,
-		Kind:       "password",
-		Record:     []byte("record"),
-		KSFVersion: 1,
-	}
-	b := store.Blob{
-		UserID:    uid,
-		Kind:      store.BlobKindKEK,
-		Version:   1,
-		Data:      []byte("kek1"),
-		CreatedAt: t0,
+		UserID: uid,
+		Kind:   "password",
+		Record: []byte("record"),
 	}
 
-	if err := m.CreateUser(ctx, u, []store.OpaqueRecord{r}, []store.Blob{b}, t0); err != nil {
+	b := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindKEK,
+		Version: 1,
+		Data:    []byte("kek1"),
+	}
+
+	if err := m.CreateUser(ctx, u, []store.OpaqueRecord{r}, []store.Blob{b}, nil, t0); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -109,13 +109,13 @@ func TestCreateUserAndUserByUsername(t *testing.T) {
 	m := New()
 	uid := id(1)
 
-	if err := m.CreateUser(ctx, store.User{ID: uid, Username: "alice"}, nil, nil, t0); !errors.Is(err, store.ErrConflict) {
+	if err := m.CreateUser(ctx, store.User{ID: uid, Username: "alice"}, nil, nil, nil, t0); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("without reservation: %v", err)
 	}
 
 	createUser(t, m, "alice", uid)
 
-	if err := m.CreateUser(ctx, store.User{ID: id(2), Username: "alice"}, nil, nil, t0); !errors.Is(err, store.ErrTaken) {
+	if err := m.CreateUser(ctx, store.User{ID: id(2), Username: "alice"}, nil, nil, nil, t0); !errors.Is(err, store.ErrTaken) {
 		t.Fatalf("duplicate username: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestCreateUserAndUserByUsername(t *testing.T) {
 	if err := m.ReserveUsername(ctx, "bob", id(2), t0, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.CreateUser(ctx, store.User{ID: id(3), Username: "bob"}, nil, nil, t0); !errors.Is(err, store.ErrConflict) {
+	if err := m.CreateUser(ctx, store.User{ID: id(3), Username: "bob"}, nil, nil, nil, t0); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("reservation owner mismatch: %v", err)
 	}
 }
@@ -229,7 +229,7 @@ func TestPasswordChangeCommitAndAbort(t *testing.T) {
 		t.Fatalf("second pending change: %v", err)
 	}
 
-	if err := m.CommitPasswordChange(ctx, uid); err != nil {
+	if err := m.CommitPasswordChange(ctx, uid, t0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,7 +243,7 @@ func TestPasswordChangeCommitAndAbort(t *testing.T) {
 		t.Fatalf("committed blob=%+v err=%v", b, err)
 	}
 
-	if err := m.CommitPasswordChange(ctx, uid); !errors.Is(err, store.ErrNotFound) {
+	if err := m.CommitPasswordChange(ctx, uid, t0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("commit with no pending change: %v", err)
 	}
 
@@ -615,11 +615,11 @@ func TestPutPublicKey(t *testing.T) {
 	uid := id(1)
 	createUser(t, m, "alice", uid)
 
-	if err := m.PutPublicKey(ctx, uid, "signing", 2, []byte("key2")); err != nil {
+	if err := m.PutPublicKey(ctx, uid, "sign", 2, []byte("key2"), t0); err != nil {
 		t.Fatalf("put public key: %v", err)
 	}
 
-	if err := m.PutPublicKey(ctx, uid, "signing", 2, []byte("duplicate")); !errors.Is(err, store.ErrConflict) {
+	if err := m.PutPublicKey(ctx, uid, "sign", 2, []byte("duplicate"), t0); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("duplicate public key error = %v, want ErrConflict", err)
 	}
 }
@@ -629,21 +629,21 @@ func TestPublicKeys(t *testing.T) {
 	uid := id(1)
 	createUser(t, m, "alice", uid)
 
-	if _, err := m.PublicKeys(ctx, uid, "signing"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := m.PublicKeys(ctx, uid, "sign"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing public keys error = %v", err)
 	}
 
-	if err := m.PutPublicKey(ctx, uid, "signing", 3, []byte("key3")); err != nil {
+	if err := m.PutPublicKey(ctx, uid, "sign", 3, []byte("key3"), t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.PutPublicKey(ctx, uid, "signing", 1, []byte("key1")); err != nil {
+	if err := m.PutPublicKey(ctx, uid, "sign", 1, []byte("key1"), t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.PutPublicKey(ctx, uid, "signing", 2, []byte("key2")); err != nil {
+	if err := m.PutPublicKey(ctx, uid, "sign", 2, []byte("key2"), t0); err != nil {
 		t.Fatal(err)
 	}
 
-	pks, err := m.PublicKeys(ctx, uid, "signing")
+	pks, err := m.PublicKeys(ctx, uid, "sign")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,6 +711,7 @@ func TestSessionsCountersDeletionAndExpiry(t *testing.T) {
 	s := store.Session{
 		IDHash:    hash(1),
 		UserID:    id(1),
+		Scope:     "full",
 		Key:       []byte("key"),
 		ExpiresAt: t0.Add(time.Hour),
 	}
@@ -769,6 +770,7 @@ func TestSessionsCountersDeletionAndExpiry(t *testing.T) {
 	expired := store.Session{
 		IDHash:    hash(3),
 		UserID:    id(2),
+		Scope:     "full",
 		ExpiresAt: t0,
 	}
 	if err := m.PutSession(ctx, expired); err != nil {
@@ -841,6 +843,7 @@ func TestDeleteExpiredAndSliceCopies(t *testing.T) {
 		IDHash:    hash(5),
 		UserID:    uid,
 		Key:       key,
+		Scope:     "full",
 		ExpiresAt: t0.Add(time.Hour),
 	}
 
@@ -869,6 +872,7 @@ func TestDeleteExpiredAndSliceCopies(t *testing.T) {
 	if err := m.PutSession(ctx, store.Session{
 		IDHash:    hash(7),
 		UserID:    uid,
+		Scope:     "full",
 		ExpiresAt: t0.Add(time.Minute),
 	}); err != nil {
 		t.Fatal(err)
@@ -930,11 +934,269 @@ func TestMutationsForMissingUser(t *testing.T) {
 		t.Fatalf("append blob for missing user error = %v, want ErrNotFound", err)
 	}
 
-	if err := m.PutPublicKey(ctx, uid, "signing", 1, []byte("key1")); !errors.Is(err, store.ErrNotFound) {
+	if err := m.PutPublicKey(ctx, uid, "sign", 1, []byte("key1"), t0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("put public key for missing user error = %v, want ErrNotFound", err)
 	}
 
 	if err := m.DeleteRecovery(ctx, uid); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("delete recovery for missing user error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCommitPasswordChangeExpiredPending(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	expiry := t0.Add(time.Hour)
+	rec := store.OpaqueRecord{
+		UserID:  uid,
+		Kind:    "password",
+		Pending: true,
+		Record:  []byte("new-record"),
+	}
+	kek := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindKEK,
+		Version: 2,
+		Pending: true,
+		Data:    []byte("kek2"),
+	}
+
+	if err := m.BeginPasswordChange(ctx, uid, 1, rec, kek, t0, expiry); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.CommitPasswordChange(ctx, uid, expiry); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("commit at expiry = %v, want ErrNotFound", err)
+	}
+
+	gotRec, err := m.CurrentOpaqueRecord(ctx, uid, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotRec.Record) != "record" {
+		t.Fatalf("current password record changed after expired commit: %q", gotRec.Record)
+	}
+
+	gotKEK, err := m.CurrentBlob(ctx, uid, store.BlobKindKEK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotKEK.Version != 1 {
+		t.Fatalf("current KEK version = %d, want 1", gotKEK.Version)
+	}
+}
+
+func TestCommitPasswordChangeMissingPending(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	if err := m.CommitPasswordChange(ctx, uid, t0); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("commit without pending change = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPutPublicKeyValidationAndCreatedAt(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	now := t0.Add(10 * time.Minute)
+
+	for _, kind := range []string{"signing", "", "unknown"} {
+		if err := m.PutPublicKey(ctx, uid, kind, 1, []byte("key"), now); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("kind %q: error = %v, want ErrConflict", kind, err)
+		}
+	}
+
+	if err := m.PutPublicKey(ctx, uid, "mlkem", 1, []byte("kem-key"), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutPublicKey(ctx, uid, "sign", 1, []byte("sign-key"), now); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, kind := range []string{"mlkem", "sign"} {
+		keys, err := m.PublicKeys(ctx, uid, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(keys) != 1 {
+			t.Fatalf("kind %q: got %d keys, want 1", kind, len(keys))
+		}
+		if !keys[0].CreatedAt.Equal(now) {
+			t.Fatalf("kind %q: CreatedAt = %v, want %v", kind, keys[0].CreatedAt, now)
+		}
+	}
+
+	if err := m.PutPublicKey(ctx, id(9), "invalid", 1, []byte("key"), now); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("invalid kind for missing user = %v, want ErrConflict", err)
+	}
+}
+
+func TestCreateUserPublicKeysAtomicValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		keys []store.PublicKey
+	}{
+		{
+			name: "wrong user ID",
+			keys: []store.PublicKey{{
+				UserID: id(9), Kind: "sign", Version: 1, Key: []byte("key"),
+			}},
+		},
+		{
+			name: "invalid kind",
+			keys: []store.PublicKey{{
+				Kind: "signing", Version: 1, Key: []byte("key"),
+			}},
+		},
+		{
+			name: "wrong version",
+			keys: []store.PublicKey{{
+				Kind: "sign", Version: 2, Key: []byte("key"),
+			}},
+		},
+		{
+			name: "empty key",
+			keys: []store.PublicKey{{
+				Kind: "sign", Version: 1,
+			}},
+		},
+		{
+			name: "oversized key",
+			keys: []store.PublicKey{{
+				Kind: "sign", Version: 1, Key: bytes.Repeat([]byte{1}, 2049),
+			}},
+		},
+		{
+			name: "duplicate keys",
+			keys: []store.PublicKey{
+				{Kind: "sign", Version: 1, Key: []byte("key1")},
+				{Kind: "sign", Version: 1, Key: []byte("key2")},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New()
+			uid := id(1)
+			username := "alice"
+
+			if err := m.ReserveUsername(ctx, username, uid, t0, t0.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+
+			for i := range tt.keys {
+				if tt.keys[i].UserID == nil {
+					tt.keys[i].UserID = clone(uid)
+				}
+			}
+
+			err := m.CreateUser(
+				ctx,
+				store.User{ID: uid, Username: username, CreatedAt: t0},
+				nil,
+				nil,
+				tt.keys,
+				t0,
+			)
+			if !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("CreateUser error = %v, want ErrConflict", err)
+			}
+
+			if _, err := m.UserByUsername(ctx, username); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("user was partially created: %v", err)
+			}
+
+			if len(m.pubKeys) != 0 {
+				t.Fatalf("public keys were partially stored: %d", len(m.pubKeys))
+			}
+
+			if _, ok := m.reservations[username]; !ok {
+				t.Fatal("reservation was removed after failed CreateUser")
+			}
+		})
+	}
+}
+
+func TestCreateUserStoresPublicKeys(t *testing.T) {
+	m := New()
+	uid := id(1)
+	username := "alice"
+
+	if err := m.ReserveUsername(ctx, username, uid, t0, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	now := t0.Add(5 * time.Minute)
+	keys := []store.PublicKey{
+		{UserID: clone(uid), Kind: "mlkem", Version: 1, Key: []byte("kem-key")},
+		{UserID: clone(uid), Kind: "sign", Version: 1, Key: []byte("sign-key")},
+	}
+
+	if err := m.CreateUser(
+		ctx,
+		store.User{ID: uid, Username: username, CreatedAt: t0},
+		nil,
+		nil,
+		keys,
+		now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, kind := range []string{"mlkem", "sign"} {
+		got, err := m.PublicKeys(ctx, uid, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].Version != 1 {
+			t.Fatalf("kind %q: unexpected keys: %+v", kind, got)
+		}
+		if !got[0].CreatedAt.Equal(now) {
+			t.Fatalf("kind %q: CreatedAt = %v, want %v", kind, got[0].CreatedAt, now)
+		}
+	}
+}
+
+func TestPutSessionScopeValidation(t *testing.T) {
+	m := New()
+
+	for _, scope := range []string{"", "invalid", "FULL"} {
+		s := store.Session{
+			IDHash:    hash(byte(len(scope) + 1)),
+			UserID:    id(1),
+			Scope:     scope,
+			ExpiresAt: t0.Add(time.Hour),
+		}
+
+		if err := m.PutSession(ctx, s); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("scope %q: error = %v, want ErrConflict", scope, err)
+		}
+	}
+
+	for i, scope := range []string{"full", "recovery"} {
+		s := store.Session{
+			IDHash:    hash(byte(20 + i)),
+			UserID:    id(1),
+			Scope:     scope,
+			ExpiresAt: t0.Add(time.Hour),
+		}
+
+		if err := m.PutSession(ctx, s); err != nil {
+			t.Fatalf("scope %q: %v", scope, err)
+		}
+
+		got, err := m.SessionByIDHash(ctx, s.IDHash, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Scope != scope {
+			t.Fatalf("stored scope = %q, want %q", got.Scope, scope)
+		}
 	}
 }

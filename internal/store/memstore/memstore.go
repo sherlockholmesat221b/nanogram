@@ -33,11 +33,6 @@ type pubKeyKey struct {
 	version uint32
 }
 
-type pendingExpiry struct {
-	userID string
-	until  time.Time
-}
-
 type MemStore struct {
 	mu           sync.Mutex
 	usersByName  map[string]store.User
@@ -151,6 +146,7 @@ func (m *MemStore) CreateUser(
 	u store.User,
 	records []store.OpaqueRecord,
 	blobs []store.Blob,
+	keys []store.PublicKey,
 	now time.Time,
 ) error {
 	if err := checkContext(ctx); err != nil {
@@ -219,6 +215,31 @@ func (m *MemStore) CreateUser(
 		seenBlobs[key] = struct{}{}
 	}
 
+	seenKeys := make(map[pubKeyKey]struct{}, len(keys))
+	for _, pk := range keys {
+		if !bytes.Equal(pk.UserID, u.ID) ||
+			(pk.Kind != "mlkem" && pk.Kind != "sign") ||
+			pk.Version != 1 ||
+			len(pk.Key) < 1 ||
+			len(pk.Key) > 2048 {
+			return store.ErrConflict
+		}
+
+		key := pubKeyKey{
+			userID:  id,
+			kind:    pk.Kind,
+			version: pk.Version,
+		}
+
+		if _, exists := m.pubKeys[key]; exists {
+			return store.ErrConflict
+		}
+		if _, exists := seenKeys[key]; exists {
+			return store.ErrConflict
+		}
+		seenKeys[key] = struct{}{}
+	}
+
 	cu := cloneUser(u)
 	m.usersByName[u.Username] = cu
 	m.usersByID[id] = cu
@@ -239,6 +260,17 @@ func (m *MemStore) CreateUser(
 			version: b.Version,
 		}
 		m.blobs[key] = cloneBlob(b)
+	}
+
+	for _, pk := range keys {
+		key := pubKeyKey{
+			userID:  id,
+			kind:    pk.Kind,
+			version: pk.Version,
+		}
+		cp := clonePublicKey(pk)
+		cp.CreatedAt = now
+		m.pubKeys[key] = cp
 	}
 
 	delete(m.reservations, u.Username)
@@ -455,6 +487,7 @@ func (m *MemStore) BeginPasswordChange(
 func (m *MemStore) CommitPasswordChange(
 	ctx context.Context,
 	userID []byte,
+	now time.Time,
 ) error {
 	if err := checkContext(ctx); err != nil {
 		return err
@@ -485,7 +518,8 @@ func (m *MemStore) CommitPasswordChange(
 		}
 	}
 
-	if !foundRecord || !foundBlob {
+	until, foundExpiry := m.expiries[id]
+	if !foundRecord || !foundBlob || !foundExpiry || !until.After(now) {
 		return store.ErrNotFound
 	}
 
@@ -711,9 +745,14 @@ func (m *MemStore) PutPublicKey(
 	kind string,
 	version uint32,
 	key []byte,
+	now time.Time,
 ) error {
 	if err := checkContext(ctx); err != nil {
 		return err
+	}
+
+	if kind != "mlkem" && kind != "sign" {
+		return store.ErrConflict
 	}
 
 	m.mu.Lock()
@@ -739,7 +778,7 @@ func (m *MemStore) PutPublicKey(
 		Kind:      kind,
 		Version:   version,
 		Key:       clone(key),
-		CreatedAt: time.Now(),
+		CreatedAt: now,
 	}
 	return nil
 }
@@ -822,14 +861,14 @@ func (m *MemStore) TakeLoginState(
 	return cloneLoginState(ls), nil
 }
 
-func (m *MemStore) PutSession(
-	ctx context.Context,
-	s store.Session,
-) error {
+func (m *MemStore) PutSession(ctx context.Context, s store.Session) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
 
+	if s.Scope != "full" && s.Scope != "recovery" {
+		return store.ErrConflict
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

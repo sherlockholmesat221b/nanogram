@@ -77,6 +77,7 @@ CREATE TABLE sessions (
     session_id_hash BINARY(32) NOT NULL,
     user_id BINARY(16) NOT NULL,
     session_key VARBINARY(64) NOT NULL,
+    scope ENUM('full', 'recovery') NOT NULL DEFAULT 'full',
     last_counter BIGINT UNSIGNED NOT NULL DEFAULT 0,
     expires_at DATETIME NOT NULL,
     PRIMARY KEY (session_id_hash),
