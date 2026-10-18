@@ -64,13 +64,13 @@ func TestSealOpenRoundTrip(t *testing.T) {
 			got, testPlaintext())
 	}
 
-	wantHash := BlobHash(userID, KindKEK, 1, prev, blob)
+	wantHash, err := BlobHash(userID, KindKEK, 1, prev, blob)
+	if err != nil {
+		t.Fatalf("BlobHash: %v", err)
+	}
 	if hash != wantHash {
-		t.Fatalf("BlobHash mismatch: got %x, want %x",
-			hash, wantHash)
 	}
 }
-
 func TestOpenBlobRejectsMetadataChanges(t *testing.T) {
 	blob, _, key, userID, prev := testSeal(t)
 
@@ -286,9 +286,12 @@ func TestBlobHashChangesWithMetadataAndBlob(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := BlobHash(
+			got, err := BlobHash(
 				tt.userID, tt.kind, tt.version, tt.prev, tt.blob,
 			)
+			if err != nil {
+				t.Fatalf("BlobHash: %v", err)
+			}
 			if got == original {
 				t.Fatal("hash did not change")
 			}
@@ -395,5 +398,28 @@ func TestOpenBlobUsesGenericError(t *testing.T) {
 	)
 	if !errors.Is(err, errBlobRejected) {
 		t.Fatalf("expected generic blob rejection, got %v", err)
+	}
+}
+
+func TestBlobHashRejectsInvalidUserIDLengths(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		userID []byte
+	}{
+		{name: "nil", userID: nil},
+		{name: "15 bytes", userID: bytes.Repeat([]byte{0x04}, 15)},
+		{name: "17 bytes", userID: bytes.Repeat([]byte{0x04}, 17)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := BlobHash(
+				tt.userID, KindKEK, 1, ZeroHash, []byte("blob"),
+			)
+			if err == nil {
+				t.Fatal("BlobHash accepted an invalid user ID length")
+			}
+			if got != ZeroHash {
+				t.Fatalf("error result hash = %x, want ZeroHash", got)
+			}
+		})
 	}
 }

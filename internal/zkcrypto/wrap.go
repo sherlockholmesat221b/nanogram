@@ -13,12 +13,17 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// BlobKind identifies the purpose of an encrypted blob.
 type BlobKind byte
 
 const (
-	KindKEK      BlobKind = 1
-	KindMEK      BlobKind = 2
+	// KindKEK identifies a key-encryption-key blob.
+	KindKEK BlobKind = 1
+	// KindMEK identifies a message-encryption-key blob.
+	KindMEK BlobKind = 2
+	// KindIdentity identifies an identity blob.
 	KindIdentity BlobKind = 3
+	// KindRecovery identifies a recovery blob.
 	KindRecovery BlobKind = 4
 )
 
@@ -35,11 +40,13 @@ const (
 )
 
 var (
+	// ZeroHash is the all-zero hash used when no previous blob exists.
 	ZeroHash [32]byte
 
 	errBlobRejected = errors.New("blob rejected")
 )
 
+// DeriveKey derives a 32-byte key from a secret and a domain-separation label.
 func DeriveKey(secret []byte, label string) ([]byte, error) {
 	if len(secret) < 32 {
 		return nil, errors.New("secret must be at least 32 bytes")
@@ -86,6 +93,7 @@ func blobAAD(
 	return aad
 }
 
+// SealBlob encrypts plaintext and returns the encoded blob and its hash.
 func SealBlob(
 	key, plaintext, userID []byte,
 	kind BlobKind,
@@ -140,10 +148,15 @@ func sealWithNonce(
 	blob = append(blob, nonce...)
 	blob = append(blob, ciphertext...)
 
-	hash = BlobHash(userID, kind, version, prev, blob)
+	hash, err = BlobHash(userID, kind, version, prev, blob)
+	if err != nil {
+		return nil, ZeroHash, err
+	}
+
 	return blob, hash, nil
 }
 
+// OpenBlob authenticates and decrypts a blob using its associated metadata.
 func OpenBlob(
 	key, blob, userID []byte,
 	kind BlobKind,
@@ -185,14 +198,19 @@ func OpenBlob(
 	return plaintext, nil
 }
 
+// BlobHash computes the SHA-256 hash of a blob's authenticated metadata
+// followed by the encoded blob. It returns an error if userID is not 16 bytes.
 func BlobHash(
 	userID []byte,
 	kind BlobKind,
 	version uint64,
 	prev [32]byte,
 	blob []byte,
-) [32]byte {
+) ([32]byte, error) {
 	aad := blobAAD(userID, kind, version, prev)
+	if aad == nil {
+		return ZeroHash, errors.New("invalid user ID")
+	}
 
 	h := sha256.New()
 	_, _ = h.Write(aad)
@@ -200,5 +218,5 @@ func BlobHash(
 
 	var sum [32]byte
 	copy(sum[:], h.Sum(nil))
-	return sum
+	return sum, nil
 }
