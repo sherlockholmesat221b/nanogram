@@ -44,6 +44,14 @@ type Blob struct {
 	CreatedAt time.Time
 }
 
+type PublicKey struct {
+	UserID    []byte
+	Kind      string
+	Version   uint32
+	Key       []byte
+	CreatedAt time.Time
+}
+
 type Session struct {
 	IDHash      [32]byte
 	UserID      []byte
@@ -99,6 +107,7 @@ type Store interface {
 		expectedKEKVersion uint64,
 		rec OpaqueRecord,
 		kek Blob,
+		now, until time.Time,
 	) error
 
 	CommitPasswordChange(
@@ -110,6 +119,37 @@ type Store interface {
 		ctx context.Context,
 		userID []byte,
 	) error
+
+	AppendBlob(
+		ctx context.Context,
+		b Blob,
+	) error
+
+	ReplaceRecovery(
+		ctx context.Context,
+		userID []byte,
+		rec OpaqueRecord,
+		blob Blob,
+	) error
+
+	DeleteRecovery(
+		ctx context.Context,
+		userID []byte,
+	) error
+
+	PutPublicKey(
+		ctx context.Context,
+		userID []byte,
+		kind string,
+		version uint32,
+		key []byte,
+	) error
+
+	PublicKeys(
+		ctx context.Context,
+		userID []byte,
+		kind string,
+	) ([]PublicKey, error)
 
 	PutLoginState(
 		ctx context.Context,

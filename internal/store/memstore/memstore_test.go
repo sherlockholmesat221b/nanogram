@@ -178,6 +178,8 @@ func TestCurrentOpaqueAndBlob(t *testing.T) {
 		1,
 		store.OpaqueRecord{UserID: uid, Kind: "password", Pending: true, Record: []byte("new")},
 		store.Blob{UserID: uid, Kind: store.BlobKindKEK, Version: 2, Pending: true, Data: []byte("kek2")},
+		t0,
+		t0.Add(time.Hour),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -210,20 +212,20 @@ func TestPasswordChangeCommitAndAbort(t *testing.T) {
 		CreatedAt: t0,
 	}
 
-	if err := m.BeginPasswordChange(ctx, uid, 9, newRec, newKEK); !errors.Is(err, store.ErrConflict) {
+	if err := m.BeginPasswordChange(ctx, uid, 9, newRec, newKEK, t0, t0.Add(time.Hour)); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("wrong expected version: %v", err)
 	}
 
 	badVersion := newKEK
 	badVersion.Version = 3
-	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, badVersion); !errors.Is(err, store.ErrConflict) {
+	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, badVersion, t0, t0.Add(time.Hour)); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("wrong next version: %v", err)
 	}
 
-	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, newKEK); err != nil {
+	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, newKEK, t0, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, newKEK); !errors.Is(err, store.ErrConflict) {
+	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, newKEK, t0, t0.Add(time.Hour)); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("second pending change: %v", err)
 	}
 
@@ -249,7 +251,7 @@ func TestPasswordChangeCommitAndAbort(t *testing.T) {
 	newKEK.Version = 3
 	newKEK.Data = []byte("kek3")
 
-	if err := m.BeginPasswordChange(ctx, uid, 2, newRec, newKEK); err != nil {
+	if err := m.BeginPasswordChange(ctx, uid, 2, newRec, newKEK, t0, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.AbortPasswordChange(ctx, uid); err != nil {
@@ -268,6 +270,398 @@ func TestPasswordChangeCommitAndAbort(t *testing.T) {
 
 	if err := m.AbortPasswordChange(ctx, uid); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("abort with no pending change: %v", err)
+	}
+}
+
+func TestPasswordChangeExpiry(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	newRec := store.OpaqueRecord{
+		UserID:     uid,
+		Kind:       "password",
+		Pending:    true,
+		Record:     []byte("expire-record"),
+		KSFVersion: 2,
+	}
+	newKEK := store.Blob{
+		UserID:    uid,
+		Kind:      store.BlobKindKEK,
+		Version:   2,
+		Pending:   true,
+		Data:      []byte("kek2"),
+		CreatedAt: t0,
+	}
+
+	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, newKEK, t0, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before expiry, starting another should conflict.
+	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, newKEK, t0.Add(30*time.Minute), t0.Add(time.Hour)); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("expected conflict before expiry, got %v", err)
+	}
+
+	// Delete expired at t0.Add(2*time.Hour).
+	if err := m.DeleteExpired(ctx, t0.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now a new BeginPasswordChange should succeed.
+	if err := m.BeginPasswordChange(ctx, uid, 1, newRec, newKEK, t0.Add(2*time.Hour), t0.Add(3*time.Hour)); err != nil {
+		t.Fatalf("expected success after expiry deletion, got %v", err)
+	}
+}
+
+func TestBeginPasswordChangeExpiredPending(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	expiry := t0.Add(time.Hour)
+
+	firstRec := store.OpaqueRecord{
+		UserID:     uid,
+		Kind:       "password",
+		Pending:    true,
+		Record:     []byte("first-record"),
+		KSFVersion: 2,
+	}
+	firstKEK := store.Blob{
+		UserID:    uid,
+		Kind:      store.BlobKindKEK,
+		Version:   2,
+		Pending:   true,
+		Data:      []byte("first-kek"),
+		CreatedAt: t0,
+	}
+
+	if err := m.BeginPasswordChange(ctx, uid, 1, firstRec, firstKEK, t0, expiry); err != nil {
+		t.Fatal(err)
+	}
+
+	secondRec := store.OpaqueRecord{
+		UserID:     uid,
+		Kind:       "password",
+		Pending:    true,
+		Record:     []byte("second-record"),
+		KSFVersion: 3,
+	}
+	secondKEK := store.Blob{
+		UserID:    uid,
+		Kind:      store.BlobKindKEK,
+		Version:   2,
+		Pending:   true,
+		Data:      []byte("second-kek"),
+		CreatedAt: expiry,
+	}
+
+	// Expiry is inclusive: until == now means the pending change has expired.
+	// This must succeed without calling DeleteExpired.
+	if err := m.BeginPasswordChange(ctx, uid, 1, secondRec, secondKEK, expiry, expiry.Add(time.Hour)); err != nil {
+		t.Fatalf("new password change blocked by expired pending change: %v", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pendingRec, ok := m.opaque[opaqueKey{
+		userID:  string(uid),
+		kind:    "password",
+		pending: true,
+	}]
+	if !ok {
+		t.Fatal("replacement pending password record not found")
+	}
+	if string(pendingRec.Record) != "second-record" {
+		t.Fatalf("pending record = %q, want second-record", pendingRec.Record)
+	}
+
+	pendingBlob, ok := m.blobs[blobKey{
+		userID:  string(uid),
+		kind:    store.BlobKindKEK,
+		version: 2,
+	}]
+	if !ok {
+		t.Fatal("replacement pending KEK not found")
+	}
+	if string(pendingBlob.Data) != "second-kek" || !pendingBlob.Pending {
+		t.Fatalf("pending KEK = %+v, want replacement pending KEK", pendingBlob)
+	}
+	if got := m.expiries[string(uid)]; !got.Equal(expiry.Add(time.Hour)) {
+		t.Fatalf("pending expiry = %v, want %v", got, expiry.Add(time.Hour))
+	}
+}
+
+func TestAppendBlob(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	pendingB := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindMEK,
+		Version: 1,
+		Pending: true,
+	}
+	if err := m.AppendBlob(ctx, pendingB); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("append pending blob error = %v", err)
+	}
+
+	wrongVer := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindMEK,
+		Version: 2,
+		Data:    []byte("mek2"),
+	}
+	if err := m.AppendBlob(ctx, wrongVer); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("append wrong version error = %v", err)
+	}
+
+	validMEK1 := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindMEK,
+		Version: 1,
+		Data:    []byte("mek1"),
+	}
+	if err := m.AppendBlob(ctx, validMEK1); err != nil {
+		t.Fatalf("append first MEK: %v", err)
+	}
+
+	validMEK2 := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindMEK,
+		Version: 2,
+		Data:    []byte("mek2"),
+	}
+	if err := m.AppendBlob(ctx, validMEK2); err != nil {
+		t.Fatalf("append second MEK: %v", err)
+	}
+
+	versionZero := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindMEK,
+		Version: 0,
+		Data:    []byte("mek0"),
+	}
+	if err := m.AppendBlob(ctx, versionZero); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("append version zero for existing kind error = %v", err)
+	}
+
+	kek := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindKEK,
+		Version: 2,
+		Data:    []byte("kek2"),
+	}
+	if err := m.AppendBlob(ctx, kek); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("append KEK error = %v, want ErrConflict", err)
+	}
+
+	recovery := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindRecovery,
+		Version: 1,
+		Data:    []byte("recovery1"),
+	}
+	if err := m.AppendBlob(ctx, recovery); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("append recovery blob error = %v, want ErrConflict", err)
+	}
+
+	current, err := m.CurrentBlob(ctx, uid, store.BlobKindMEK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Version != 2 || string(current.Data) != "mek2" {
+		t.Fatalf("current MEK = %+v, want version 2", current)
+	}
+}
+
+func TestReplaceRecovery(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	rec := store.OpaqueRecord{
+		UserID:     uid,
+		Kind:       "recovery",
+		Record:     []byte("rec1"),
+		KSFVersion: 1,
+	}
+	blob := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindRecovery,
+		Version: 1,
+		Data:    []byte("recblob1"),
+	}
+
+	if err := m.ReplaceRecovery(ctx, uid, rec, blob); err != nil {
+		t.Fatalf("replace first recovery: %v", err)
+	}
+
+	gotRec, err := m.CurrentOpaqueRecord(ctx, uid, "recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotRec.Record) != "rec1" {
+		t.Fatalf("recovery record = %q, want rec1", gotRec.Record)
+	}
+
+	gotBlob, err := m.CurrentBlob(ctx, uid, store.BlobKindRecovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBlob.Version != 1 || string(gotBlob.Data) != "recblob1" {
+		t.Fatalf("recovery blob = %+v", gotBlob)
+	}
+
+	rec2 := store.OpaqueRecord{
+		UserID:     uid,
+		Kind:       "recovery",
+		Record:     []byte("rec2"),
+		KSFVersion: 1,
+	}
+	blob2 := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindRecovery,
+		Version: 2,
+		Data:    []byte("recblob2"),
+	}
+	if err := m.ReplaceRecovery(ctx, uid, rec2, blob2); err != nil {
+		t.Fatalf("replace second recovery: %v", err)
+	}
+
+	gotRec, err = m.CurrentOpaqueRecord(ctx, uid, "recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotRec.Record) != "rec2" {
+		t.Fatalf("replacement recovery record = %q, want rec2", gotRec.Record)
+	}
+
+	gotBlob, err = m.CurrentBlob(ctx, uid, store.BlobKindRecovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBlob.Version != 2 || string(gotBlob.Data) != "recblob2" {
+		t.Fatalf("replacement recovery blob = %+v", gotBlob)
+	}
+
+	wrongVersionBlob := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindRecovery,
+		Version: 4,
+		Data:    []byte("wrong-version"),
+	}
+	if err := m.ReplaceRecovery(ctx, uid, rec2, wrongVersionBlob); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("wrong recovery version error = %v, want ErrConflict", err)
+	}
+
+	missingUID := id(9)
+	missingRec := store.OpaqueRecord{
+		UserID: missingUID,
+		Kind:   "recovery",
+		Record: []byte("missing"),
+	}
+	missingBlob := store.Blob{
+		UserID:  missingUID,
+		Kind:    store.BlobKindRecovery,
+		Version: 1,
+		Data:    []byte("missing"),
+	}
+	if err := m.ReplaceRecovery(ctx, missingUID, missingRec, missingBlob); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing user error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteRecovery(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	rec := store.OpaqueRecord{
+		UserID: uid,
+		Kind:   "recovery",
+		Record: []byte("recovery-record"),
+	}
+	blob := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindRecovery,
+		Version: 1,
+		Data:    []byte("recovery-blob"),
+	}
+	if err := m.ReplaceRecovery(ctx, uid, rec, blob); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.DeleteRecovery(ctx, uid); err != nil {
+		t.Fatalf("delete recovery: %v", err)
+	}
+	if _, err := m.CurrentOpaqueRecord(ctx, uid, "recovery"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("recovery record after deletion error = %v", err)
+	}
+	if _, err := m.CurrentBlob(ctx, uid, store.BlobKindRecovery); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("recovery blob after deletion error = %v", err)
+	}
+
+	if err := m.DeleteRecovery(ctx, uid); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("delete missing recovery error = %v", err)
+	}
+}
+
+func TestPutPublicKey(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	if err := m.PutPublicKey(ctx, uid, "signing", 2, []byte("key2")); err != nil {
+		t.Fatalf("put public key: %v", err)
+	}
+
+	if err := m.PutPublicKey(ctx, uid, "signing", 2, []byte("duplicate")); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate public key error = %v, want ErrConflict", err)
+	}
+}
+
+func TestPublicKeys(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	if _, err := m.PublicKeys(ctx, uid, "signing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing public keys error = %v", err)
+	}
+
+	if err := m.PutPublicKey(ctx, uid, "signing", 3, []byte("key3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutPublicKey(ctx, uid, "signing", 1, []byte("key1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PutPublicKey(ctx, uid, "signing", 2, []byte("key2")); err != nil {
+		t.Fatal(err)
+	}
+
+	pks, err := m.PublicKeys(ctx, uid, "signing")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pks) != 3 {
+		t.Fatalf("got %d public keys, want 3", len(pks))
+	}
+
+	for i, wantVersion := range []uint32{1, 2, 3} {
+		if pks[i].Version != wantVersion {
+			t.Fatalf("public key at index %d has version %d, want %d", i, pks[i].Version, wantVersion)
+		}
+	}
+
+	if string(pks[0].Key) != "key1" ||
+		string(pks[1].Key) != "key2" ||
+		string(pks[2].Key) != "key3" {
+		t.Fatalf("unexpected public key contents: %+v", pks)
 	}
 }
 
@@ -500,7 +894,7 @@ func TestCopiesInputSlices(t *testing.T) {
 	uid := id(1)
 	createUser(t, m, "alice", uid)
 
-	// Mutating the caller's original ID must not change stored user data.
+	// Mutating the caller's original ID must not change stored user data
 	uid[0] = 88
 
 	got, err := m.UserByUsername(ctx, "alice")
@@ -519,5 +913,28 @@ func TestContextCancellation(t *testing.T) {
 
 	if err := m.DeleteExpired(c, t0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled context error = %v", err)
+	}
+}
+
+func TestMutationsForMissingUser(t *testing.T) {
+	m := New()
+	uid := id(9)
+
+	blob := store.Blob{
+		UserID:  uid,
+		Kind:    store.BlobKindMEK,
+		Version: 1,
+		Data:    []byte("mek1"),
+	}
+	if err := m.AppendBlob(ctx, blob); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("append blob for missing user error = %v, want ErrNotFound", err)
+	}
+
+	if err := m.PutPublicKey(ctx, uid, "signing", 1, []byte("key1")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("put public key for missing user error = %v, want ErrNotFound", err)
+	}
+
+	if err := m.DeleteRecovery(ctx, uid); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("delete recovery for missing user error = %v, want ErrNotFound", err)
 	}
 }
