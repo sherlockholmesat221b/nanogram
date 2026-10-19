@@ -12,7 +12,7 @@ if [ -n "$unformatted" ]; then
     exit 1
 fi
 
-packages=$(go list ./internal/... ./cmd/argbench)
+packages=$(go list ./client/... ./internal/... ./cmd/argbench)
 
 go vet $packages
 GOOS=js GOARCH=wasm go vet ./cmd/argwasm

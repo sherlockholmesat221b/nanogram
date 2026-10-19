@@ -17,7 +17,9 @@ var usernamePattern = regexp.MustCompile(`^[a-z0-9_.]{3,32}$`)
 
 const registrationReservationLifetime = 5 * time.Minute
 
-// RegisterStart reserves a username and returns the OPAQUE registration responses.
+// RegisterStart builds the OPAQUE registration responses and then reserves the
+// username. The reservation comes last on purpose: a malformed request must
+// never be able to lock a name.
 func (s *Service) RegisterStart(
 	ctx context.Context,
 	username string,
@@ -34,6 +36,24 @@ func (s *Service) RegisterStart(
 		return result, ErrInternal
 	}
 
+	passwordResponse, err := s.auth.RegistrationResponse(passwordReq, userID)
+	if err != nil {
+		return result, ErrInvalidRequest
+	}
+
+	var recoveryResponse []byte
+	if len(recoveryReq) != 0 {
+		credentialID, err := zkcrypto.RecoveryCredentialID(userID)
+		if err != nil {
+			return result, ErrInternal
+		}
+
+		recoveryResponse, err = s.auth.RegistrationResponse(recoveryReq, credentialID)
+		if err != nil {
+			return result, ErrInvalidRequest
+		}
+	}
+
 	now := s.now()
 	if err := s.store.ReserveUsername(
 		ctx,
@@ -48,29 +68,11 @@ func (s *Service) RegisterStart(
 		return result, ErrInternal
 	}
 
-	passwordResponse, err := s.auth.RegistrationResponse(passwordReq, userID)
-	if err != nil {
-		return result, ErrInvalidRequest
-	}
-
-	result.UserID = userID
-	result.PasswordResponse = passwordResponse
-
-	if len(recoveryReq) != 0 {
-		credentialID, err := zkcrypto.RecoveryCredentialID(userID)
-		if err != nil {
-			return RegisterStartResult{}, ErrInternal
-		}
-
-		recoveryResponse, err := s.auth.RegistrationResponse(recoveryReq, credentialID)
-		if err != nil {
-			return RegisterStartResult{}, ErrInvalidRequest
-		}
-
-		result.RecoveryResponse = recoveryResponse
-	}
-
-	return result, nil
+	return RegisterStartResult{
+		UserID:           userID,
+		PasswordResponse: passwordResponse,
+		RecoveryResponse: recoveryResponse,
+	}, nil
 }
 
 // RegisterFinish validates registration data and atomically creates the user.
