@@ -9,8 +9,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/bytemare/opaque"
-
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/auth"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/zkcrypto"
@@ -34,6 +32,10 @@ func (s *Service) LoginStart(
 		return result, ErrInvalidRequest
 	}
 
+	if !usernamePattern.MatchString(username) {
+		return result, ErrInvalidRequest
+	}
+
 	user, userErr := s.store.UserByUsername(ctx, username)
 
 	var userID []byte
@@ -41,22 +43,29 @@ func (s *Service) LoginStart(
 
 	switch {
 	case errors.Is(userErr, store.ErrNotFound):
+		// Unknown name: answer with an identity derived from the name, so
+		// repeated requests for the same name look the same.
 		userID = s.auth.FakeUserID(username)
 
 	case userErr != nil:
 		return result, ErrInternal
 
 	default:
+		// The real user ID goes back for both kinds, even when the user has
+		// no record of the requested kind. Otherwise the answer would show
+		// who has switched recovery off.
+		userID = user.ID
+
 		record, err := s.store.CurrentOpaqueRecord(ctx, user.ID, kind)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			userID = s.auth.FakeUserID(username)
+			// No record of this kind: stored stays nil and the OPAQUE
+			// library answers with a fake record.
 
 		case err != nil:
 			return result, ErrInternal
 
 		default:
-			userID = user.ID
 			credentialID := user.ID
 
 			if kind == "recovery" {
@@ -201,19 +210,4 @@ func (s *Service) CurrentBlobs(
 	}
 
 	return result, nil
-}
-
-// clientLoginFinish completes the client side of an OPAQUE login.
-// It is a test helper and is intentionally not part of the service API.
-func clientLoginFinish(
-	conf *opaque.Configuration,
-	ke2, password, clientID []byte,
-) (ke3, sessionKey []byte, err error) {
-	client, err := conf.Client()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	_ = client
-	return nil, nil, errors.New("unimplemented")
 }

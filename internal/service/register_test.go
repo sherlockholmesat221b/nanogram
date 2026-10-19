@@ -215,16 +215,35 @@ func TestRegisterStartRejectsTakenUsername(t *testing.T) {
 
 	_, _ = f.validFinishRequest(t, testUsername, false)
 
-	// The helper above reserves the username. A second reservation must fail.
-	_, err := f.service.RegisterStart(
-		context.Background(),
-		testUsername,
-		[]byte("malformed request"),
-		nil,
-	)
+	// The helper above reserves the username. A second start with a
+	// valid request must be refused.
+	request := f.client(t).RegistrationInit([]byte(testPassword)).Serialize()
 
+	_, err := f.service.RegisterStart(
+		context.Background(), testUsername, request, nil,
+	)
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("RegisterStart error = %v, want ErrUsernameTaken", err)
+	}
+}
+
+func TestRegisterStartMalformedRequestDoesNotReserveName(t *testing.T) {
+	f := newRegistrationFixture(t)
+
+	_, err := f.service.RegisterStart(
+		context.Background(), testUsername, []byte("malformed request"), nil,
+	)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("malformed request: error = %v, want ErrInvalidRequest", err)
+	}
+
+	// The name must still be free.
+	request := f.client(t).RegistrationInit([]byte(testPassword)).Serialize()
+
+	if _, err := f.service.RegisterStart(
+		context.Background(), testUsername, request, nil,
+	); err != nil {
+		t.Fatalf("a malformed request locked the name: %v", err)
 	}
 }
 
