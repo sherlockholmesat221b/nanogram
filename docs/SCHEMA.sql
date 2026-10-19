@@ -82,6 +82,8 @@ CREATE TABLE sessions (
     scope ENUM('full', 'recovery') NOT NULL DEFAULT 'full',
     last_counter BIGINT UNSIGNED NOT NULL DEFAULT 0,
     expires_at DATETIME NOT NULL,
+    -- Absolute limit for expires_at; NULL means no limit.
+    max_expires_at DATETIME NULL,
     PRIMARY KEY (session_id_hash),
     KEY idx_sessions_expires_at (expires_at),
     CONSTRAINT fk_sessions_user

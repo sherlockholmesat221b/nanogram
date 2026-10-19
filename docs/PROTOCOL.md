@@ -108,7 +108,7 @@ First time a client talks to a server it stores the server's public key. After t
 - Every request carries session_id, a counter, and
   MAC = HMAC-SHA256(request_key, method | path | counter | SHA256(body)).
 - Server checks the MAC and that the counter is higher than the last one it saw for this session. Replays and reordering fail.
-- Sessions expire fast. No refresh: when it runs out the client logs in again with the passphrase.
+- A full session slides: each valid request extends it to 30 minutes from now, never past 12 hours after the login. A recovery session is fixed at 10 minutes and does not slide. The store applies the cap, in the same step that moves the counter. Requests that fail any check change nothing.
 - Responses are not MACed in v1. Tampering by the server itself is covered by the signed, hash-chained data, not by this.
 
 ## Login rules
@@ -149,7 +149,7 @@ Pin one exact version in go.mod. The API changed between 0.9 and 0.10 (SetKeyMat
 
 Everything in this part happens on the client. The server only stores the blobs.
 
-Status: password change is decided (two phases, in v1). The cipher (XChaCha20-Poly1305 proposed) and the recovery credential (option 1 proposed) are not yet decided.
+Status: password change is decided (two phases, in v1). Recovery is proposed on by default with a skip option. The cipher (XChaCha20-Poly1305 proposed) and the recovery credential (option 1 proposed) are not yet decided.
 
 ### Keys
 
@@ -158,7 +158,7 @@ Status: password change is decided (two phases, in v1). The cipher (XChaCha20-Po
 - KEK: random 32 bytes, made once at registration. The account key. Everything else is wrapped under it.
 - MEK: random 32 bytes, encrypts the user's own stored history. Versioned, so a new one per period can be added later (forward secrecy, v2).
 - Identity seeds: random seeds for the ML-KEM key pair and the signing key pair. Only the seeds are stored, the keys are regenerated from them. Public keys are stored in clear.
-- recovery_key: random 32 bytes, shown once to the user, never sent. recovery_wrap_key = HKDF-SHA-256(recovery_key, info LabelRecovery).
+- recovery_key: random 32 bytes, shown once to the user as 24 words from the BIP39 list (proposed, not yet decided), never sent. recovery_wrap_key = HKDF-SHA-256(recovery_key, info LabelRecovery).
 
 ### What the server stores (table key_blobs)
 
@@ -206,7 +206,26 @@ Step 5 is what stops a buggy or hostile client from locking the user out with a 
 
 ### Recovery flow
 
-Login with the recovery credential, fetch the recovery blob, decrypt KEK, set a new password as in the password change above (steps 2 to 5).
+The recovery key is never used directly. Two independent keys come out of it:
+- OPAQUE input for the recovery login: HKDF(recovery_key, info "zkc/v1/recovery-login") (new frozen label, LabelRecoveryLogin)
+- recovery_wrap_key: HKDF(recovery_key, info LabelRecovery)
+
+Steps:
+1. User enters username and the 24 recovery words (the word list has a built-in checksum, so a typo is told apart from a wrong key).
+2. OPAQUE login with the recovery record. The session it opens can only fetch the recovery blob and do a password change, nothing else.
+3. Client fetches the recovery blob, decrypts the KEK with recovery_wrap_key.
+4. User picks a new passphrase, then the password change above (steps 2 to 5).
+5. Client makes a new recovery key, replaces the recovery record and blob, and ends all older sessions. The old recovery key is dead.
+
+### Recovery risks and what limits them
+
+- The recovery key is as good as the account. Anyone holding it can read everything. It must be random 256 bit, shown once, never saved by the app, never sent. The weak spot is where the user keeps it.
+- Phishing: a fake page asks for the recovery key. The protocol hides it from the server, but not from malicious page code. The key is only ever asked for on the recovery screen of the trusted client.
+- Silent takeover: if the key leaks and someone recovers the account, the kek version goes up. The real user's client sees a version it did not expect and warns. Hiding it needs the server to also rewrite the client's remembered chain head, which it cannot reach.
+- Online guessing is pointless against 256 bits, rate limits only protect server load.
+- Disabling: a logged-in user can delete the recovery record and blob. Then a lost password means lost data, and the UI says so.
+- Typing check at setup: the user is asked to re-enter a few of the words before registration finishes.
+- A stolen recovery key also opens all past data. That is the price of recovery without forward secrecy.
 
 ### Schema changes this needs
 

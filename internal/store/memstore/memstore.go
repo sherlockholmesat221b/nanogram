@@ -906,6 +906,7 @@ func (m *MemStore) AdvanceCounter(
 	ctx context.Context,
 	idHash [32]byte,
 	counter uint64,
+	expiresAt time.Time,
 ) error {
 	if err := checkContext(ctx); err != nil {
 		return err
@@ -924,6 +925,15 @@ func (m *MemStore) AdvanceCounter(
 	}
 
 	s.LastCounter = counter
+
+	// The expiry only moves forward, and never past the absolute limit.
+	if !s.MaxExpiresAt.IsZero() && expiresAt.After(s.MaxExpiresAt) {
+		expiresAt = s.MaxExpiresAt
+	}
+	if expiresAt.After(s.ExpiresAt) {
+		s.ExpiresAt = expiresAt
+	}
+
 	m.sessions[idHash] = s
 	return nil
 }

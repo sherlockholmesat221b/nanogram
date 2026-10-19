@@ -13,7 +13,12 @@ import (
 )
 
 const (
-	minPassphraseWords      = 8
+	// DefaultPassphraseWords is the length user interfaces should generate:
+	// 7 words from a list of 2048 are about 77 bits.
+	DefaultPassphraseWords = 7
+
+	minPassphraseWords      = 6
+	maxPassphraseWords      = 64
 	minCustomPassphraseSize = 20
 	bip39WordIndexMask      = 0x07ff
 )
@@ -32,7 +37,11 @@ var bip39Words = func() map[string]struct{} {
 // GeneratePassphrase generates a passphrase containing the requested number of randomly selected BIP39 words.
 func GeneratePassphrase(words int) (string, error) {
 	if words < minPassphraseWords {
-		return "", errors.New("passphrase must contain at least 8 words")
+		return "", errors.New("passphrase must contain at least 6 words")
+	}
+
+	if words > maxPassphraseWords {
+		return "", errors.New("passphrase must contain at most 64 words")
 	}
 
 	wordList := bip39.GetWordList()
@@ -40,16 +49,24 @@ func GeneratePassphrase(words int) (string, error) {
 		return "", errors.New("unexpected BIP39 word list size")
 	}
 
-	selected := make([]string, words)
+	selected := make([]string, 0, words)
+	used := make(map[uint16]struct{}, words)
 	var randomBytes [2]byte
 
-	for i := range selected {
+	// Words are drawn without repeats, so the check that asks for distinct
+	// words can never refuse a generated passphrase.
+	for len(selected) < words {
 		if _, err := cryptorand.Read(randomBytes[:]); err != nil {
 			return "", err
 		}
 
 		index := binary.BigEndian.Uint16(randomBytes[:]) & bip39WordIndexMask
-		selected[i] = wordList[index]
+		if _, repeated := used[index]; repeated {
+			continue
+		}
+
+		used[index] = struct{}{}
+		selected = append(selected, wordList[index])
 	}
 
 	return strings.Join(selected, " "), nil
@@ -86,5 +103,5 @@ func CheckPassphrase(p string, allowCustom bool) error {
 		return nil
 	}
 
-	return errors.New("passphrase must contain at least 8 distinct BIP39 words, or be a custom passphrase of at least 20 characters when custom passphrases are allowed")
+	return errors.New("passphrase must contain at least 6 distinct BIP39 words, or be a custom passphrase of at least 20 characters when custom passphrases are allowed")
 }
