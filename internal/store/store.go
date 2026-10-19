@@ -55,12 +55,13 @@ type PublicKey struct {
 }
 
 type Session struct {
-	IDHash      [32]byte
-	UserID      []byte
-	Key         []byte
-	Scope       string
-	LastCounter uint64
-	ExpiresAt   time.Time
+	IDHash       [32]byte
+	UserID       []byte
+	Key          []byte
+	Scope        string
+	LastCounter  uint64
+	ExpiresAt    time.Time
+	MaxExpiresAt time.Time // absolute limit for ExpiresAt, zero means no limit
 }
 
 type LoginState struct {
@@ -179,10 +180,15 @@ type Store interface {
 		now time.Time,
 	) (Session, error)
 
+	// AdvanceCounter moves the replay counter forward (ErrConflict if counter is
+	// not higher than the stored one). In the same step it moves the session
+	// expiry forward to expiresAt: never backwards, never past MaxExpiresAt.
+	// A zero expiresAt leaves the expiry alone.
 	AdvanceCounter(
 		ctx context.Context,
 		idHash [32]byte,
 		counter uint64,
+		expiresAt time.Time,
 	) error
 
 	DeleteSessionsForUser(

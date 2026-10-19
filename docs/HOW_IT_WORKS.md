@@ -8,7 +8,7 @@ You have a username and a passphrase. The server stores your data but cannot rea
 
 ## Words used below
 
-- **Passphrase**: 8 random words, generated for you.
+- **Passphrase**: 7 random words (about 77 bits), generated for you. 6 is the smallest accepted.
 - **OPAQUE**: the login protocol. It lets you prove you know the passphrase without sending it. A library does the maths.
 - **Argon2id**: a deliberately slow, memory-hungry function. It turns the passphrase into key material and makes every password guess expensive. It runs inside the OPAQUE library on the client.
 - **export_key**: a secret that comes out of OPAQUE on the client only. The server never gets it.
@@ -42,10 +42,12 @@ The server now holds a record (it cannot be turned back into the passphrase), en
 
 Every request carries: the session ID, a counter, and a MAC over method, path, counter and a hash of the body. The server (`service.Authenticate`):
 1. finds the session (not found or expired: refused),
-2. checks the MAC (wrong: refused, and the counter does not move),
+2. checks the MAC (wrong: refused, and nothing changes),
 3. checks the scope,
-4. only then requires the counter to be higher than the last one.
+4. only then requires the counter to be higher than the last one, and in the same step moves the expiry forward.
 So a copied request cannot be replayed, changed or sent to another path. This is why sessions use signatures and not a plain token.
+
+A full session slides: every valid request keeps it alive for another 30 minutes, but never longer than 12 hours after the login. A recovery session is fixed at 10 minutes.
 
 ## Recovery
 

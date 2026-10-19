@@ -15,8 +15,15 @@ import (
 )
 
 const (
-	loginStateLifetime      = 30 * time.Second
-	fullSessionLifetime     = 15 * time.Minute
+	loginStateLifetime = 30 * time.Second
+
+	// A full session stays alive while it is used: every valid request
+	// extends it by fullSessionIdle, but never past fullSessionMax after
+	// the login.
+	fullSessionIdle = 30 * time.Minute
+	fullSessionMax  = 12 * time.Hour
+
+	// A recovery session is short and does not slide.
 	recoverySessionLifetime = 10 * time.Minute
 )
 
@@ -158,20 +165,23 @@ func (s *Service) LoginFinish(
 	}
 
 	scope := "full"
-	lifetime := fullSessionLifetime
+	expires := now.Add(fullSessionIdle)
+	maxExpires := now.Add(fullSessionMax)
 
 	if loginState.Kind == "recovery" {
 		scope = "recovery"
-		lifetime = recoverySessionLifetime
+		expires = now.Add(recoverySessionLifetime)
+		maxExpires = expires
 	}
 
 	if err := s.store.PutSession(ctx, store.Session{
-		IDHash:      sha256.Sum256(sessionID),
-		UserID:      user.ID,
-		Key:         requestKey,
-		Scope:       scope,
-		LastCounter: 0,
-		ExpiresAt:   now.Add(lifetime),
+		IDHash:       sha256.Sum256(sessionID),
+		UserID:       user.ID,
+		Key:          requestKey,
+		Scope:        scope,
+		LastCounter:  0,
+		ExpiresAt:    expires,
+		MaxExpiresAt: maxExpires,
 	}); err != nil {
 		return result, ErrInternal
 	}

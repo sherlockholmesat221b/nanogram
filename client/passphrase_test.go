@@ -15,8 +15,12 @@ func TestGeneratePassphrase(t *testing.T) {
 		words int
 	}{
 		{
-			name:  "8 words",
-			words: 8,
+			name:  "6 words",
+			words: 6,
+		},
+		{
+			name:  "7 words",
+			words: 7,
 		},
 		{
 			name:  "12 words",
@@ -49,22 +53,22 @@ func TestGeneratePassphrase(t *testing.T) {
 }
 
 func TestGeneratePassphraseRejectsTooFewWords(t *testing.T) {
-	passphrase, err := GeneratePassphrase(7)
+	passphrase, err := GeneratePassphrase(5)
 	if err == nil {
-		t.Fatal("GeneratePassphrase(7) error = nil, want error")
+		t.Fatal("GeneratePassphrase(5) error = nil, want error")
 	}
 
 	if passphrase != "" {
-		t.Fatalf("GeneratePassphrase(7) = %q, want empty string", passphrase)
+		t.Fatalf("GeneratePassphrase(5) = %q, want empty string", passphrase)
 	}
 }
 
-func TestCheckPassphraseRejectsSevenWords(t *testing.T) {
+func TestCheckPassphraseRejectsFiveWords(t *testing.T) {
 	wordList := bip39.GetWordList()
-	passphrase := strings.Join(wordList[:7], " ")
+	passphrase := strings.Join(wordList[:5], " ")
 
 	if err := CheckPassphrase(passphrase, false); err == nil {
-		t.Fatal("CheckPassphrase(7 words, false) error = nil, want error")
+		t.Fatal("CheckPassphrase(5 words, false) error = nil, want error")
 	}
 }
 
@@ -76,23 +80,23 @@ func TestCheckPassphraseRejectsEightCopiesOfOneWord(t *testing.T) {
 	}
 }
 
-func TestCheckPassphraseRejectsNineWordsWithSevenDistinctWords(t *testing.T) {
+func TestCheckPassphraseRejectsNineWordsWithFiveDistinctWords(t *testing.T) {
 	wordList := bip39.GetWordList()
-	words := append([]string(nil), wordList[:7]...)
-	words = append(words, wordList[0], wordList[1])
+	words := append([]string(nil), wordList[:5]...)
+	words = append(words, wordList[0], wordList[1], wordList[2], wordList[3])
 	passphrase := strings.Join(words, " ")
 
 	if err := CheckPassphrase(passphrase, false); err == nil {
-		t.Fatal("CheckPassphrase(9 words with 7 distinct words, false) error = nil, want error")
+		t.Fatal("CheckPassphrase(9 words with 5 distinct words, false) error = nil, want error")
 	}
 }
 
-func TestCheckPassphraseAcceptsEightDistinctWords(t *testing.T) {
+func TestCheckPassphraseAcceptsSixDistinctWords(t *testing.T) {
 	wordList := bip39.GetWordList()
-	passphrase := strings.Join(wordList[:8], " ")
+	passphrase := strings.Join(wordList[:6], " ")
 
 	if err := CheckPassphrase(passphrase, false); err != nil {
-		t.Fatalf("CheckPassphrase(8 distinct words, false) error = %v", err)
+		t.Fatalf("CheckPassphrase(6 distinct words, false) error = %v", err)
 	}
 }
 
@@ -186,5 +190,45 @@ func TestCheckPassphraseRejectsShortCustomPassphrase(t *testing.T) {
 				t.Fatal("CheckPassphrase() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestGeneratedPassphrasesNeverRepeatAWord(t *testing.T) {
+	for _, words := range []int{6, DefaultPassphraseWords, 12} {
+		for i := 0; i < 500; i++ {
+			passphrase, err := GeneratePassphrase(words)
+			if err != nil {
+				t.Fatalf("GeneratePassphrase(%d): %v", words, err)
+			}
+
+			seen := make(map[string]struct{}, words)
+			for _, word := range strings.Fields(passphrase) {
+				if _, repeated := seen[word]; repeated {
+					t.Fatalf("%q repeats the word %q", passphrase, word)
+				}
+				seen[word] = struct{}{}
+			}
+
+			if err := CheckPassphrase(passphrase, false); err != nil {
+				t.Fatalf("CheckPassphrase(%q): %v", passphrase, err)
+			}
+		}
+	}
+}
+
+func TestDefaultPassphraseLength(t *testing.T) {
+	passphrase, err := GeneratePassphrase(DefaultPassphraseWords)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(strings.Fields(passphrase)); got != 7 {
+		t.Fatalf("default passphrase has %d words, want 7", got)
+	}
+}
+
+func TestGeneratePassphraseRejectsTooManyWords(t *testing.T) {
+	if _, err := GeneratePassphrase(65); err == nil {
+		t.Fatal("GeneratePassphrase(65) error = nil, want error")
 	}
 }

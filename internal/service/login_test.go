@@ -616,7 +616,7 @@ func TestSessionExpires(t *testing.T) {
 		t.Fatalf("full session after the recovery lifetime: %v", err)
 	}
 
-	f.now = f.now.Add(fullSessionLifetime)
+	f.now = f.now.Add(fullSessionIdle + time.Second)
 
 	request = signed(fullKey, full.SessionID, 2, "GET", "/v1/account/blobs", nil)
 	if _, err := f.service.Authenticate(context.Background(), request, "full"); !errors.Is(err, ErrUnauthorized) {
@@ -655,5 +655,97 @@ func TestCurrentBlobsSkipsMissingKinds(t *testing.T) {
 		blobs[0].Kind != store.BlobKindKEK ||
 		blobs[1].Kind != store.BlobKindMEK {
 		t.Fatalf("unexpected blobs: %+v", blobs)
+	}
+}
+
+func TestSessionSlidesWithActivity(t *testing.T) {
+	f := newRegistrationFixture(t)
+	f.registerUser(t, false)
+
+	info, key := f.session(t, "password", testPassword)
+
+	// One hour in total, which is longer than one idle period, but never
+	// more than 20 minutes between two requests.
+	for counter := uint64(1); counter <= 3; counter++ {
+		f.now = f.now.Add(20 * time.Minute)
+
+		request := signed(key, info.SessionID, counter, "GET", "/v1/account/blobs", nil)
+		if _, err := f.service.Authenticate(context.Background(), request, "full"); err != nil {
+			t.Fatalf("request %d: %v", counter, err)
+		}
+	}
+}
+
+func TestSessionNeverOutlivesItsMaximum(t *testing.T) {
+	f := newRegistrationFixture(t)
+	f.registerUser(t, false)
+
+	info, key := f.session(t, "password", testPassword)
+	start := f.now
+
+	for counter := uint64(1); ; counter++ {
+		f.now = f.now.Add(20 * time.Minute)
+
+		request := signed(key, info.SessionID, counter, "GET", "/v1/account/blobs", nil)
+		_, err := f.service.Authenticate(context.Background(), request, "full")
+
+		if f.now.Before(start.Add(fullSessionMax)) {
+			if err != nil {
+				t.Fatalf("%v after login: %v", f.now.Sub(start), err)
+			}
+			continue
+		}
+
+		if !errors.Is(err, ErrUnauthorized) {
+			t.Fatalf("%v after login: error = %v, want ErrUnauthorized", f.now.Sub(start), err)
+		}
+		return
+	}
+}
+
+func TestRecoverySessionDoesNotSlide(t *testing.T) {
+	f := newRegistrationFixture(t)
+	f.registerUser(t, true)
+
+	info, key := f.session(t, "recovery", testRecovery)
+
+	f.now = f.now.Add(6 * time.Minute)
+
+	request := signed(key, info.SessionID, 1, "GET", "/v1/recovery/blob", nil)
+	if _, err := f.service.Authenticate(context.Background(), request, "recovery"); err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+
+	// 11 minutes after the login: past the fixed 10 minutes.
+	f.now = f.now.Add(5 * time.Minute)
+
+	request = signed(key, info.SessionID, 2, "GET", "/v1/recovery/blob", nil)
+	if _, err := f.service.Authenticate(context.Background(), request, "recovery"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("second request: error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestInvalidRequestDoesNotExtendTheSession(t *testing.T) {
+	f := newRegistrationFixture(t)
+	f.registerUser(t, false)
+
+	info, key := f.session(t, "password", testPassword)
+
+	f.now = f.now.Add(20 * time.Minute)
+
+	bad := signed(key, info.SessionID, 1, "GET", "/v1/account/blobs", nil)
+	bad.MAC[0] ^= 1
+
+	if _, err := f.service.Authenticate(context.Background(), bad, "full"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("bad MAC: error = %v, want ErrUnauthorized", err)
+	}
+
+	// 31 minutes after the login. Without the bad request nothing was
+	// extended, so the session has run out.
+	f.now = f.now.Add(11 * time.Minute)
+
+	good := signed(key, info.SessionID, 1, "GET", "/v1/account/blobs", nil)
+	if _, err := f.service.Authenticate(context.Background(), good, "full"); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("after the idle period: error = %v, want ErrUnauthorized", err)
 	}
 }
