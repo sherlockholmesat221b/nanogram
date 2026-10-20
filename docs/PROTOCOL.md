@@ -237,3 +237,18 @@ Steps:
 
 - Go version on every machine: crypto/mlkem needs Go 1.24 or newer.
 - Whether ML-KEM keys can be restored from the stored seed with the standard library.
+
+## Part 4: HTTP API
+
+All bodies are JSON, sent with Content-Type application/json, at most 64 KiB, one value, no unknown fields. Binary fields are standard base64 strings. Every response carries Cache-Control: no-store. Errors are {"error": "<code>"} with these codes: unauthorized (401, used for failed logins and failed signatures alike), invalid_request and invalid_username (400), unsupported_media_type (415), too_large (413), username_taken (409), internal (500).
+
+| Method and path | Body | Answer |
+|---|---|---|
+| POST /v1/register/start | username, password_request, recovery_request (optional) | user_id, password_response, recovery_response |
+| POST /v1/register/finish | user_id, username, password_record, recovery_record (optional), blobs [kind, version, prev_hash (32 bytes), data], public_keys [kind, key] | 204 |
+| POST /v1/login/start | username, kind ("password" or "recovery"), ke1 | login_id, user_id, ke2 |
+| POST /v1/login/finish | login_id, ke3 | session_id, user_id, scope |
+| GET /v1/account/blobs | none, signed, scope full | blobs (kek, mek, identity) |
+| GET /v1/recovery/blob | none, signed, scope recovery | blobs (recovery) |
+
+Signed requests carry three headers: X-Session (session id, base64), X-Counter (decimal, must be higher than the last one used) and X-MAC (base64). The MAC is the request MAC from part 2 over the method, the URL path (as the server routes it, without a query string), the counter and the raw body. Requests with a query string on signed routes are refused, because the signature would not cover it.
