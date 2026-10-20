@@ -252,3 +252,11 @@ All bodies are JSON, sent with Content-Type application/json, at most 64 KiB, on
 | GET /v1/recovery/blob | none, signed, scope recovery | blobs (recovery) |
 
 Signed requests carry three headers: X-Session (session id, base64), X-Counter (decimal, must be higher than the last one used) and X-MAC (base64). The MAC is the request MAC from part 2 over the method, the URL path (as the server routes it, without a query string), the counter and the raw body. Requests with a query string on signed routes are refused, because the signature would not cover it.
+
+## Password input
+
+The server never sees the password, and the protocol puts no rule on it: the OPAQUE password is the exact bytes the client sends in. Our clients make one convenience, in the client only: when what the user typed is made entirely of BIP39 words (at least 6), they use the lowercase, single-spaced form, so capitals and spacing do not matter for a generated passphrase. Anything else, for example a password from a password manager, is used exactly as typed. A client that does not do this still works with any account whose password is not a plain word list.
+
+Whether a password is strong enough is judged by the client and only advises: the server cannot see the password and enforces nothing.
+
+Not yet decided: Unicode normalisation (NFC) of non-ASCII passwords, so the same characters typed on different systems give the same bytes. It needs one dependency, golang.org/x/text.
