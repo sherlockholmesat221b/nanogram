@@ -232,3 +232,29 @@ func TestGeneratePassphraseRejectsTooManyWords(t *testing.T) {
 		t.Fatal("GeneratePassphrase(65) error = nil, want error")
 	}
 }
+
+func TestPasswordInput(t *testing.T) {
+	wordList := bip39.GetWordList()
+	words := strings.Join(wordList[:6], " ")
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"words are canonicalised", "  " + strings.ToUpper(words) + "\t", words},
+		{"words with odd spacing", strings.ReplaceAll(words, " ", "   "), words},
+		{"a manager password is kept exactly", "Horses-BATTERYstaples ", "Horses-BATTERYstaples "},
+		{"case and punctuation stay", "  Foo\tBAR \n baz  ", "  Foo\tBAR \n baz  "},
+		{"five words are not a generated passphrase", "Abandon ability able about above", "Abandon ability able about above"},
+		{"words and something else", words + " Hunter2", words + " Hunter2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PasswordInput(tt.input); got != tt.want {
+				t.Fatalf("PasswordInput(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
