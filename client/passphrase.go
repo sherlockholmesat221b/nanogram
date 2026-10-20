@@ -72,14 +72,37 @@ func GeneratePassphrase(words int) (string, error) {
 	return strings.Join(selected, " "), nil
 }
 
+// PasswordInput returns the string that goes into OPAQUE for what the user
+// typed. It is the typed text exactly, with one convenience: when the text is
+// made only of words from the BIP39 list (at least the minimum number of
+// them) the lowercase, single-spaced form is used, so capitals and spacing do
+// not matter for a generated passphrase. Anything else, such as a password from
+// a password manager, is used exactly as typed. Registration and login both
+// use this function, and the server never sees either form.
+func PasswordInput(p string) string {
+	words := strings.Fields(strings.ToLower(p))
+
+	if len(words) >= minPassphraseWords {
+		allListed := true
+
+		for _, word := range words {
+			if _, ok := bip39Words[word]; !ok {
+				allListed = false
+				break
+			}
+		}
+
+		if allListed {
+			return strings.Join(words, " ")
+		}
+	}
+
+	return p
+}
+
 // CheckPassphrase checks the passphrase format only; it cannot prove that the words were chosen at random. User interfaces must only offer output from GeneratePassphrase.
 func CheckPassphrase(p string, allowCustom bool) error {
-	normalised := strings.Join(
-		strings.Fields(strings.ToLower(p)),
-		" ",
-	)
-
-	words := strings.Fields(normalised)
+	words := strings.Fields(strings.ToLower(p))
 	if len(words) >= minPassphraseWords {
 		distinct := make(map[string]struct{}, len(words))
 		allValid := true
@@ -99,7 +122,7 @@ func CheckPassphrase(p string, allowCustom bool) error {
 	}
 
 	// allowCustom is only a length check; it is weak and must be false in shipped user interfaces.
-	if allowCustom && utf8.RuneCountInString(normalised) >= minCustomPassphraseSize {
+	if allowCustom && utf8.RuneCountInString(p) >= minCustomPassphraseSize {
 		return nil
 	}
 
