@@ -109,7 +109,7 @@ func login(ctx context.Context, o options, showDetails bool) error {
 		return err
 	}
 	session, err := c.Login(ctx, o.user, pass)
-	clear([]byte(pass))
+	//	clear([]byte(pass))
 	if err != nil {
 		if errors.Is(err, client.ErrLoginFailed) {
 			return client.ErrLoginFailed
