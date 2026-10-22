@@ -9,10 +9,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 )
 
+// fileHeads keeps the heads in one JSON file. It is safe for use by several
+// goroutines, but not by several processes at once: the last write wins.
 type fileHeads struct {
 	mu    sync.Mutex
 	path  string
@@ -22,28 +23,42 @@ type fileHeads struct {
 var _ HeadStore = (*fileHeads)(nil)
 
 // NewFileHeads loads a persistent, private store of blob heads.
+//
+// The directory is created with mode 0700 when it does not exist. An existing
+// directory is left alone, but refused when other users can write to it, since
+// they could replace or delete the file. The file itself must be a regular
+// file (not a link) that only its owner can access.
 func NewFileHeads(path string) (HeadStore, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+
+	info, err := os.Stat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+	case err != nil:
 		return nil, err
-	}
-	if err := os.Chmod(dir, 0700); err != nil {
-		return nil, err
+	case !info.IsDir():
+		return nil, errors.New("the heads directory is not a directory")
+	case info.Mode().Perm()&0o022 != 0:
+		return nil, errors.New("the heads directory is writable by other users")
 	}
 
 	h := &fileHeads{path: path, heads: make(map[string]Head)}
-	info, err := os.Lstat(path)
+
+	fileInfo, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return h, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("heads file is not a regular file")
+	if !fileInfo.Mode().IsRegular() {
+		return nil, errors.New("the heads file is not a regular file")
 	}
-	if info.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("heads file permissions are too open")
+	if fileInfo.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("the heads file permissions are too open")
 	}
 
 	data, err := os.ReadFile(path)
@@ -56,6 +71,7 @@ func NewFileHeads(path string) (HeadStore, error) {
 	if h.heads == nil {
 		h.heads = make(map[string]Head)
 	}
+
 	return h, nil
 }
 
@@ -71,6 +87,8 @@ func (h *fileHeads) Get(userID []byte, kind byte) (Head, bool) {
 	return head, ok
 }
 
+// Put saves the head by writing a temporary file next to the real one and
+// renaming it over it, so a crash never leaves a half-written file.
 func (h *fileHeads) Put(userID []byte, kind byte, head Head) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -87,6 +105,7 @@ func (h *fileHeads) Put(userID []byte, kind byte, head Head) error {
 	}
 
 	dir := filepath.Dir(h.path)
+
 	f, err := os.CreateTemp(dir, ".heads-*")
 	if err != nil {
 		return err
@@ -94,7 +113,7 @@ func (h *fileHeads) Put(userID []byte, kind byte, head Head) error {
 	tmp := f.Name()
 	defer os.Remove(tmp)
 
-	if err := f.Chmod(0600); err != nil {
+	if err := f.Chmod(0o600); err != nil {
 		f.Close()
 		return err
 	}
@@ -113,9 +132,13 @@ func (h *fileHeads) Put(userID []byte, kind byte, head Head) error {
 		return err
 	}
 
+	// Make the rename itself durable. Some systems cannot sync a directory,
+	// and the data is already safe in the file, so failures are ignored.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+
 	h.heads = next
 	return nil
 }
-
-// Keep the import list independent of platform-specific file permissions.
-var _ = strings.Builder{}
