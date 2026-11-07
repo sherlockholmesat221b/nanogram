@@ -19,6 +19,7 @@ You have a username and a passphrase. The server stores your data but cannot rea
 - **Session**: a temporary login. Nothing secret is sent with each request, only a signature.
 - **MAC**: a short tag that proves a message came from someone who holds a shared key and was not changed on the way.
 - **Scope**: what a session may do. "full" (after a passphrase login) or "recovery" (after a recovery login, only for resetting).
+- **Pending**: a login kind, used only to prove the new password of a password change that has begun. A pending login is not a general login.
 
 ## Registration
 
@@ -49,6 +50,17 @@ So a copied request cannot be replayed, changed or sent to another path. This is
 
 A full session slides: every valid request keeps it alive for another 30 minutes, but never longer than 12 hours after the login. A recovery session is fixed at 10 minutes.
 
+## Changing the password
+
+The KEK never changes. Only the blob that holds it is replaced: it is re-wrapped under a key made from the new password, and stored as the next version of the KEK blob, chained to the previous hash. The MEK, the identity and the recovery blob stay as they are.
+
+1. Client: runs a new OPAQUE registration for the new password, with the same user id as the credential id. Gets a new record and a new wrap key. (`service.PasswordChangeStart`)
+2. Client: re-wraps the KEK under the new wrap key, checks that it opens again, and sends the record and the new blob together with the version it started from. (`service.PasswordChangeBegin`)
+3. Server: stores both as pending for 10 minutes, but only if the current KEK version is what the client said and nothing is already pending (otherwise 409 conflict). Logins still use the old password.
+4. Client: proves the new password with a login of kind "pending". The server checks the proof against the pending record. On success it makes both current, ends every older session, and opens a new full session for the client.
+
+If step 4 never happens, the pending change expires and nothing changed. This is what stops a buggy client from locking the user out by setting a record for the wrong password. The device that made the change is not warned about the new KEK version; other devices see a chained newer version and are told, so a silent takeover by someone who knows the old password is noticed.
+
 ## Recovery
 
 At registration the client can create a spare key as 24 words. The server stores a second OPAQUE record for it (the recovery credential) and a copy of the KEK locked under it. Logging in with the recovery kind gives a limited "recovery" scope session. Resetting the password from there is not built yet.
@@ -59,12 +71,13 @@ At registration the client can create a spare key as 24 words. The server stores
 |---|---|---|
 | internal/auth | Wraps the OPAQUE library: server keys file, registration, login start and finish, fake answers for unknown users | ~340 lines |
 | internal/zkcrypto | Key derivation labels, blob lock and unlock, hash chain, recovery phrase, request MAC | ~370 lines |
-| internal/service | The brain: registration, login, session checks. No network code | ~650 lines |
-| internal/store | The storage interface (and the in-memory version in memstore) | ~200 + ~990 lines |
-| client | Passphrase generator and check. The rest of the client library is not written yet | ~90 lines |
+| internal/service | The brain: registration, login, session checks, password change. No network code | ~790 lines |
+| internal/store | The storage interface and the in-memory version in memstore | ~1,330 lines |
+| client | Registers, logs in, opens the account blobs, checks them against what this device has seen, changes the password. Reads and writes the head file. | ~1,490 lines |
+| cmd/ngcli | A developer test client. Not for real accounts. | ~310 lines |
 | docs/SCHEMA.sql | The MariaDB tables for a later real store | |
 
-About 2,750 lines of logic and 3,800 lines of tests in total. The part that decides security (auth, zkcrypto, service) is roughly 1,350 lines.
+About 5,550 lines of logic and 7,860 lines of tests in total. The part that decides security (auth, zkcrypto, service) is roughly 1,500 lines.
 
 ## Rules the code must keep
 
@@ -75,7 +88,8 @@ About 2,750 lines of logic and 3,800 lines of tests in total. The part that deci
 - Times are passed in, never read from the clock inside the store.
 - Blob associated data binds user, kind, version and the previous hash.
 - Identities in OPAQUE: client identity is the user ID (or the recovery credential ID), server identity is nil.
+- A password change replaces the KEK blob, not the KEK. Every older session ends, and only after the new password is proven.
 
 ## Not built yet
 
-The HTTP layer (wire types and handlers), the client library (key generation, blob handling, checking that the server has not rolled data back), the command-line client, the MariaDB store, rate limiting, the recovery reset, and everything about messages.
+The MariaDB store, rate limiting, the recovery reset, and everything about messages.
