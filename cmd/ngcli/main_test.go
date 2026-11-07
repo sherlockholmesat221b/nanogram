@@ -51,7 +51,7 @@ func TestParseOptionsNeedsAUser(t *testing.T) {
 }
 
 func TestParseOptionsChecksTheUsernameFormat(t *testing.T) {
-	for _, user := range []string{"Bob", "ab", "has space", "wayyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy_too_long"} {
+	for _, user := range []string{"a-b", "ab", "has space", "wayyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy_too_long"} {
 		if _, err := parseOptions("register", []string{"-user", user}); err == nil {
 			t.Fatalf("the username %q was accepted", user)
 		}

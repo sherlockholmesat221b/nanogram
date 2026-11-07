@@ -7,20 +7,22 @@ import (
 	"encoding/binary"
 	"errors"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/tyler-smith/go-bip39"
 )
 
 const (
-	// DefaultPassphraseWords is the length user interfaces should generate:
-	// 7 words from a list of 2048 are about 77 bits.
+	// DefaultPassphraseWords is the length suggested to users: 7 words from a
+	// list of 2048 are about 77 bits.
 	DefaultPassphraseWords = 7
 
-	minPassphraseWords      = 6
-	maxPassphraseWords      = 64
-	minCustomPassphraseSize = 20
-	bip39WordIndexMask      = 0x07ff
+	minPassphraseWords = 6
+	maxPassphraseWords = 64
+	bip39WordIndexMask = 0x07ff
+
+	// A suggestion that the strength check would refuse is thrown away and
+	// drawn again. That costs a fraction of a bit.
+	maxSuggestionTries = 100
 )
 
 var bip39Words = func() map[string]struct{} {
@@ -34,16 +36,8 @@ var bip39Words = func() map[string]struct{} {
 	return result
 }()
 
-// GeneratePassphrase generates a passphrase containing the requested number of randomly selected BIP39 words.
-func GeneratePassphrase(words int) (string, error) {
-	if words < minPassphraseWords {
-		return "", errors.New("passphrase must contain at least 6 words")
-	}
-
-	if words > maxPassphraseWords {
-		return "", errors.New("passphrase must contain at most 64 words")
-	}
-
+// drawWords picks words from the BIP39 list without repeating one.
+func drawWords(words int) (string, error) {
 	wordList := bip39.GetWordList()
 	if len(wordList) != 2048 {
 		return "", errors.New("unexpected BIP39 word list size")
@@ -53,8 +47,6 @@ func GeneratePassphrase(words int) (string, error) {
 	used := make(map[uint16]struct{}, words)
 	var randomBytes [2]byte
 
-	// Words are drawn without repeats, so the check that asks for distinct
-	// words can never refuse a generated passphrase.
 	for len(selected) < words {
 		if _, err := cryptorand.Read(randomBytes[:]); err != nil {
 			return "", err
@@ -70,6 +62,31 @@ func GeneratePassphrase(words int) (string, error) {
 	}
 
 	return strings.Join(selected, " "), nil
+}
+
+// GeneratePassphrase suggests a passphrase of random BIP39 words. It never
+// returns one that CheckPassword would refuse. Using it is optional: users may
+// choose their own password.
+func GeneratePassphrase(words int) (string, error) {
+	if words < minPassphraseWords {
+		return "", errors.New("passphrase must contain at least 6 words")
+	}
+	if words > maxPassphraseWords {
+		return "", errors.New("passphrase must contain at most 64 words")
+	}
+
+	for try := 0; try < maxSuggestionTries; try++ {
+		passphrase, err := drawWords(words)
+		if err != nil {
+			return "", err
+		}
+
+		if CheckPassword(passphrase, nil) == nil {
+			return passphrase, nil
+		}
+	}
+
+	return "", errors.New("could not make a passphrase that passes the strength check")
 }
 
 // PasswordInput returns the string that goes into OPAQUE for what the user
@@ -98,33 +115,4 @@ func PasswordInput(p string) string {
 	}
 
 	return p
-}
-
-// CheckPassphrase checks the passphrase format only; it cannot prove that the words were chosen at random. User interfaces must only offer output from GeneratePassphrase.
-func CheckPassphrase(p string, allowCustom bool) error {
-	words := strings.Fields(strings.ToLower(p))
-	if len(words) >= minPassphraseWords {
-		distinct := make(map[string]struct{}, len(words))
-		allValid := true
-
-		for _, word := range words {
-			if _, ok := bip39Words[word]; !ok {
-				allValid = false
-				break
-			}
-
-			distinct[word] = struct{}{}
-		}
-
-		if allValid && len(distinct) >= minPassphraseWords {
-			return nil
-		}
-	}
-
-	// allowCustom is only a length check; it is weak and must be false in shipped user interfaces.
-	if allowCustom && utf8.RuneCountInString(p) >= minCustomPassphraseSize {
-		return nil
-	}
-
-	return errors.New("passphrase must contain at least 6 distinct BIP39 words, or be a custom passphrase of at least 20 characters when custom passphrases are allowed")
 }

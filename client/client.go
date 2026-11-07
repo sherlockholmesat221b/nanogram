@@ -104,11 +104,15 @@ func (c *Client) Register(
 ) (RegisterResult, error) {
 	var result RegisterResult
 
+	if !ValidUsername(username) {
+		return result, service.ErrInvalidUsername
+	}
+
 	if PasswordInput(passphrase) != PasswordInput(confirm) {
 		return result, ErrPassphraseMismatch
 	}
 
-	if err := CheckPassphrase(passphrase, false); err != nil {
+	if err := CheckPassword(passphrase, []string{username}); err != nil {
 		return result, fmt.Errorf("%w: %v", ErrWeakPassphrase, err)
 	}
 

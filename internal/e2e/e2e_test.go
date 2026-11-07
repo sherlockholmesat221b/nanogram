@@ -130,8 +130,12 @@ func TestUsernameRulesOverHTTP(t *testing.T) {
 		t.Fatalf("taken name: error = %v", err)
 	}
 
-	if _, err := s.client.Register(ctx, "Alice", pass, pass, false); !errors.Is(err, service.ErrInvalidUsername) {
-		t.Fatalf("capital letters: error = %v", err)
+	if _, err := s.client.Register(ctx, "ALICE", pass, pass, false); !errors.Is(err, service.ErrUsernameTaken) {
+		t.Fatalf("another spelling of a taken name: error = %v", err)
+	}
+
+	if _, err := s.client.Register(ctx, "a-b", pass, pass, false); !errors.Is(err, service.ErrInvalidUsername) {
+		t.Fatalf("a bad character: error = %v", err)
 	}
 }
 

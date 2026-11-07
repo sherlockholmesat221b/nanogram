@@ -427,7 +427,6 @@ func TestLoginStartRejectsBadInput(t *testing.T) {
 	}{
 		{"unknown kind", testUsername, "admin", ke1},
 		{"empty kind", testUsername, "", ke1},
-		{"capital letters", "Alice", "password", ke1},
 		{"too long", string(bytes.Repeat([]byte{'a'}, 33)), "password", ke1},
 		{"too short", "al", "password", ke1},
 		{"garbage KE1, known user", testUsername, "password", []byte{1, 2, 3}},

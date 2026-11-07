@@ -260,3 +260,8 @@ The server never sees the password, and the protocol puts no rule on it: the OPA
 Whether a password is strong enough is judged by the client and only advises: the server cannot see the password and enforces nothing.
 
 Not yet decided: Unicode normalisation (NFC) of non-ASCII passwords, so the same characters typed on different systems give the same bytes. It needs one dependency, golang.org/x/text.
+
+## Decisions of 22 October 2026 (these replace earlier lines)
+
+- Usernames: 3 to 32 characters from a-z, A-Z, 0-9, underscore and dot. Names are matched without regard to case ("Alice" and "alice" are one account) and stored in lowercase. A separate display name can keep capitals later.
+- Passwords are chosen by the user. The client refuses a password whose estimated number of guesses is below 2^66, using the zxcvbn estimate with the username as a known word. A generated 7 word passphrase is only a suggestion. The server cannot see or check the password, so this is advice from the client, not a protocol rule.

@@ -43,6 +43,8 @@ func (s *Service) LoginStart(
 		return result, ErrInvalidRequest
 	}
 
+	username = canonicalUsername(username)
+
 	user, userErr := s.store.UserByUsername(ctx, username)
 
 	var userID []byte

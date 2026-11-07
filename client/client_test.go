@@ -499,3 +499,20 @@ func TestWipeClearsTheSecrets(t *testing.T) {
 		t.Fatal("the request key was not wiped")
 	}
 }
+
+func TestCustomPasswordIsUsedExactly(t *testing.T) {
+	r := newRig(t)
+
+	const password = "k9#Vq2$Lm8@xW4!zR7pT"
+
+	if _, err := r.client.Register(context.Background(), "alice", password, password, false); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	r.login(t, password)
+
+	// Case matters for anything that is not a plain list of words.
+	if _, err := r.client.Login(context.Background(), "alice", strings.ToLower(password)); !errors.Is(err, ErrLoginFailed) {
+		t.Fatalf("another case: error = %v, want ErrLoginFailed", err)
+	}
+}

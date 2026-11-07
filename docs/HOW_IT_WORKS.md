@@ -8,7 +8,7 @@ You have a username and a passphrase. The server stores your data but cannot rea
 
 ## Words used below
 
-- **Passphrase**: 7 random words (about 77 bits), generated for you. 6 is the smallest accepted.
+- **Password**: whatever the user chooses, as long as the client's strength check accepts it (an estimate of at least 2^66 guesses). A generated passphrase of 7 random words can be suggested.
 - **OPAQUE**: the login protocol. It lets you prove you know the passphrase without sending it. A library does the maths.
 - **Argon2id**: a deliberately slow, memory-hungry function. It turns the passphrase into key material and makes every password guess expensive. It runs inside the OPAQUE library on the client.
 - **export_key**: a secret that comes out of OPAQUE on the client only. The server never gets it.

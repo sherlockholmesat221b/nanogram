@@ -144,13 +144,12 @@ func register(ctx context.Context, o options) error {
 		return err
 	}
 
-	pass, err := client.GeneratePassphrase(client.DefaultPassphraseWords)
+	pass, err := readSecret("Password: ")
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Write down this passphrase and keep it private:\n%s\n", pass)
 
-	again, err := readSecret("Type the passphrase again to confirm: ")
+	again, err := readSecret("Confirm the password: ")
 	if err != nil {
 		return err
 	}
@@ -160,11 +159,28 @@ func register(ctx context.Context, o options) error {
 		return err
 	}
 
+	// How to hand over the recovery phrase safely is still undecided. For now
+	// it is shown on the terminal once, and never written anywhere.
 	fmt.Println("RECOVERY PHRASE: STORE OFFLINE.")
 	fmt.Println("Write these 24 words on paper and keep them in a secure place.")
 	fmt.Println("Never store them in an app, file, or cloud service.")
 	fmt.Println(result.RecoveryPhrase)
 
+	return nil
+}
+
+// suggest prints a generated passphrase, for people who want one.
+func suggest() error {
+	if err := requireTerminal(); err != nil {
+		return err
+	}
+
+	passphrase, err := client.GeneratePassphrase(client.DefaultPassphraseWords)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(passphrase)
 	return nil
 }
 
@@ -214,10 +230,14 @@ func run(args []string) error {
 	fmt.Fprintln(os.Stderr, "ngcli is a test tool for developers. Do not use it for accounts you care about.")
 
 	if len(args) == 0 {
-		return errors.New("usage: ngcli <register|login|blobs> -user USER [-server URL]")
+		return errors.New("usage: ngcli <register|login|blobs> -user USER [-server URL], or ngcli suggest")
 	}
 
 	command := args[0]
+
+	if command == "suggest" {
+		return suggest()
+	}
 
 	o, err := parseOptions(command, args[1:])
 	if err != nil {
@@ -232,7 +252,7 @@ func run(args []string) error {
 	case "blobs":
 		return login(context.Background(), o, true)
 	default:
-		return fmt.Errorf("unknown command %q (use register, login or blobs)", command)
+		return fmt.Errorf("unknown command %q (use register, login, blobs or suggest)", command)
 	}
 }
 

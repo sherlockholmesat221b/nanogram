@@ -191,7 +191,6 @@ func TestRegisterStartRejectsInvalidUsername(t *testing.T) {
 	for _, username := range []string{
 		"",
 		"ab",
-		"UPPERCASE",
 		"contains-hyphen",
 		"contains space",
 	} {

@@ -3,3 +3,4 @@ wasm_exec.js
 server-keys.json
 keys/
 server-keys.json
+bin/

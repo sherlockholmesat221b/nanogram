@@ -32,8 +32,9 @@ func TestClientAndServerAgreeOnUsernames(t *testing.T) {
 	for _, name := range names {
 		_, err := s.transport.RegisterStart(context.Background(), name, request, nil)
 
+		// A name that is already taken has a valid format.
 		serverAccepts := !errors.Is(err, service.ErrInvalidUsername)
-		if err != nil && serverAccepts {
+		if err != nil && serverAccepts && !errors.Is(err, service.ErrUsernameTaken) {
 			t.Fatalf("%q: unexpected error %v", name, err)
 		}
 

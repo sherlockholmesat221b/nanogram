@@ -7,13 +7,22 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strings"
 	"time"
 
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/zkcrypto"
 )
 
-var usernamePattern = regexp.MustCompile(`^[a-z0-9_.]{3,32}$`)
+var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_.]{3,32}$`)
+
+// canonicalUsername is the form in which a username is stored and compared.
+// Names are matched without regard to case, so "Alice" and "alice" are the same
+// account and nobody can register a look-alike that differs only in capitals.
+// A separate display name can keep the capitals later.
+func canonicalUsername(username string) string {
+	return strings.ToLower(username)
+}
 
 const registrationReservationLifetime = 5 * time.Minute
 
@@ -30,6 +39,8 @@ func (s *Service) RegisterStart(
 	if !usernamePattern.MatchString(username) {
 		return result, ErrInvalidUsername
 	}
+
+	username = canonicalUsername(username)
 
 	userID := make([]byte, 16)
 	if _, err := io.ReadFull(s.rand, userID); err != nil {
@@ -80,6 +91,8 @@ func (s *Service) RegisterFinish(ctx context.Context, r RegisterFinishRequest) e
 	if !usernamePattern.MatchString(r.Username) {
 		return ErrInvalidUsername
 	}
+
+	r.Username = canonicalUsername(r.Username)
 	if len(r.UserID) != 16 {
 		return ErrInvalidRequest
 	}

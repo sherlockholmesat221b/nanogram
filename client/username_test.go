@@ -19,7 +19,7 @@ func TestValidUsername(t *testing.T) {
 		{"ab", false},
 		{strings.Repeat("a", 33), false},
 		{"", false},
-		{"Alice", false},
+		{"Alice", true},
 		{"al ice", false},
 		{"alice!", false},
 		{"a-b", false},
