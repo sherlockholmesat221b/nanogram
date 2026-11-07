@@ -226,6 +226,57 @@ func passwd(ctx context.Context, o options) error {
 	return nil
 }
 
+// recover resets the password using the 24-word recovery phrase, then rotates
+// the phrase and shows the new one once.
+func recoverPassword(ctx context.Context, o options) error {
+	if err := requireTerminal(); err != nil {
+		return err
+	}
+
+	c, err := newClient(o.server)
+	if err != nil {
+		return err
+	}
+
+	phrase, err := readSecret("Recovery phrase: ")
+	if err != nil {
+		return err
+	}
+
+	pass, err := readSecret("New password: ")
+	if err != nil {
+		return err
+	}
+
+	again, err := readSecret("Confirm the new password: ")
+	if err != nil {
+		return err
+	}
+
+	session, err := c.RecoverWithPhrase(ctx, o.user, phrase, pass, again)
+	if err != nil {
+		if errors.Is(err, client.ErrLoginFailed) {
+			return errors.New("recovery failed: wrong phrase, or recovery is not set up")
+		}
+		return err
+	}
+	defer session.Wipe()
+
+	fmt.Println("Password changed. Every other session has ended.")
+
+	newPhrase, err := c.RotateRecovery(ctx, session)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: the recovery phrase was not rotated: %v\n", err)
+		fmt.Fprintln(os.Stderr, "the old phrase still works; run 'ngcli recover' again to rotate it")
+		return nil
+	}
+
+	fmt.Println("NEW RECOVERY PHRASE: STORE OFFLINE.")
+	fmt.Println("The old phrase no longer works.")
+	fmt.Println(newPhrase)
+	return nil
+}
+
 // login logs in. With countBlobs it then asks for the blobs once more and
 // prints how many there are, otherwise it prints the user id and the scope.
 func login(ctx context.Context, o options, countBlobs bool) error {
@@ -293,6 +344,8 @@ func run(args []string) error {
 		return login(context.Background(), o, false)
 	case "passwd":
 		return passwd(context.Background(), o)
+	case "recover":
+		return recoverPassword(context.Background(), o)
 	case "blobs":
 		return login(context.Background(), o, true)
 	default:

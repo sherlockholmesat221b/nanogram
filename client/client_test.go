@@ -67,6 +67,58 @@ func (d direct) PasswordBegin(ctx context.Context, sign Signer, expectedVersion 
 	return d.svc.PasswordChangeBegin(ctx, session.UserID, expectedVersion, record, kek)
 }
 
+func (d direct) RecoveryBlob(ctx context.Context, r service.AuthRequest) (service.RecoveryViewResult, error) {
+	scope := "recovery"
+	if r.Path == wire.PathAccountRecoveryBlob {
+		scope = "full"
+	}
+	session, err := d.svc.Authenticate(ctx, r, scope)
+	if err != nil {
+		return service.RecoveryViewResult{}, err
+	}
+	return d.svc.RecoveryView(ctx, session.UserID)
+}
+
+func (d direct) RecoveryPasswordStart(ctx context.Context, sign Signer, passwordReq []byte) ([]byte, error) {
+	session, err := d.svc.Authenticate(ctx, sign("POST", wire.PathRecoveryPasswordStart, nil), "recovery")
+	if err != nil {
+		return nil, err
+	}
+	return d.svc.RecoveryPasswordStart(ctx, session.UserID, passwordReq)
+}
+
+func (d direct) RecoveryPasswordBegin(ctx context.Context, sign Signer, expectedVersion uint64, record []byte, kek service.BlobUpload) error {
+	session, err := d.svc.Authenticate(ctx, sign("POST", wire.PathRecoveryPasswordBegin, nil), "recovery")
+	if err != nil {
+		return err
+	}
+	return d.svc.RecoveryPasswordBegin(ctx, session.UserID, expectedVersion, record, kek)
+}
+
+func (d direct) RecoveryRotateStart(ctx context.Context, sign Signer, recoveryReq []byte) ([]byte, error) {
+	session, err := d.svc.Authenticate(ctx, sign("POST", wire.PathRecoveryRotateStart, nil), "full")
+	if err != nil {
+		return nil, err
+	}
+	return d.svc.RecoveryRotateStart(ctx, session.UserID, recoveryReq)
+}
+
+func (d direct) RecoveryRotateBegin(ctx context.Context, sign Signer, expectedVersion uint64, record []byte, blob service.BlobUpload) error {
+	session, err := d.svc.Authenticate(ctx, sign("POST", wire.PathRecoveryRotateBegin, nil), "full")
+	if err != nil {
+		return err
+	}
+	return d.svc.RecoveryRotateBegin(ctx, session.UserID, expectedVersion, record, blob)
+}
+
+func (d direct) RecoveryDisable(ctx context.Context, sign Signer) error {
+	session, err := d.svc.Authenticate(ctx, sign("POST", wire.PathRecoveryDisable, nil), "full")
+	if err != nil {
+		return err
+	}
+	return d.svc.RecoveryDisable(ctx, session.UserID)
+}
+
 // counting counts how often the server was contacted for a registration.
 type counting struct {
 	Transport

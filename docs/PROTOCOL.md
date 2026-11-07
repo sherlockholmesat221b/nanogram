@@ -277,3 +277,122 @@ The user is logged in with a full session and holds the KEK. Only the KEK blob i
 
 If step 4 never happens, the pending change expires and nothing has changed. A device that last saw version n and now sees n+1 with the right previous hash gets a notice, not an error.
 
+## Part 6: recovering a lost password
+
+A recovery session exists so a user who has forgotten the password but kept
+the 24 words can set a new one, then replace the phrase. The reset reuses the
+password change from part 5; what part 6 adds is the routes through which a
+recovery session reaches the KEK header it needs, and a rotation of the
+recovery key after the change commits.
+
+### What a recovery session can do
+
+A recovery session (scope "recovery", 10 minutes, no slide, from a login of
+kind "recovery") may only:
+
+- read the recovery blob and the current KEK header (GET /v1/recovery/blob),
+- start and finish a password change (POST /v1/recovery/password/start and
+  /v1/recovery/password/begin).
+
+It may not read the account blobs. It may not do anything else.
+
+A full session may read the same recovery data (GET /v1/account/recovery/blob,
+same response shape) so the rotation step does not need a recovery session
+after the pending login has ended every older session.
+
+### Flow
+
+1. The user enters the username and the 24 words. The client decodes them
+   into the recovery key, derives the login secret, and runs OPAQUE login of
+   kind "recovery". The server issues a recovery session.
+
+2. GET /v1/recovery/blob returns the current recovery blob and the current
+   KEK blob's version, previous hash and hash. The client opens the recovery
+   blob with the recovery wrap key to obtain the KEK.
+
+3. POST /v1/recovery/password/start asks the server for its OPAQUE half of
+   the new password. Credential id is the user id, as in part 5.
+
+4. The client finishes OPAQUE locally, locks the same KEK under the new wrap
+   key as KEK blob version n+1, chained to the KEK hash from step 2, and
+   checks the blob opens.
+
+5. POST /v1/recovery/password/begin stages the change as pending for 10
+   minutes, with the same rules as part 5, step 3.
+
+6. The client proves the new password with a login of kind "pending". On
+   success the change is committed, every older session ends, and a full
+   session is issued.
+
+7. The client, now on the new full session, reads the current recovery blob
+   with GET /v1/account/recovery/blob to learn the version and hash the
+   rotation chains onto.
+
+8. POST /v1/account/recovery/rotate/start returns the OPAQUE registration
+   response for a new recovery credential (credential id is
+   RecoveryCredentialID(user id)).
+
+9. The client makes a new 32 byte recovery key, derives the new login secret
+   and the new recovery wrap key, finishes OPAQUE locally, locks the same
+   KEK under the new wrap key as recovery blob version n+1 chained to the
+   hash from step 7, and checks the blob opens.
+
+10. POST /v1/account/recovery/rotate/begin sends the new record, the new
+    blob, and the recovery version the client started from. The server
+    checks the current recovery version is what the client said (409
+    conflict otherwise) and replaces record and blob atomically.
+
+11. The client shows the new 24 words once.
+
+### Disabling recovery
+
+POST /v1/account/recovery/disable removes the recovery record and every
+recovery blob, and ends any recovery session. It is idempotent: 204 whether
+or not recovery was set up.
+
+Re-enabling recovery (a new registration of a recovery credential via
+rotate/start and rotate/begin with expected_version 0) restarts at blob
+version 1. The client does not track recovery heads, so there is no false
+rollback error. The recovery blob holds the KEK, which does not change
+across recovery versions, so a rolled-back recovery blob can only give the
+same KEK, and a rotated one fails to open. There is therefore nothing for
+a recovery head to detect.
+
+### Routes
+
+| Method and path | Scope | Body | Answer |
+|---|---|---|---|
+| GET /v1/recovery/blob | recovery | none | blobs [recovery], kek_header {version, prev_hash, hash} |
+| POST /v1/recovery/password/start | recovery | password_request | password_response |
+| POST /v1/recovery/password/begin | recovery | expected_version, record, kek | 204 |
+| GET /v1/account/recovery/blob | full | none | blobs [recovery], kek_header {version, prev_hash, hash} |
+| POST /v1/account/recovery/rotate/start | full | recovery_request | recovery_response |
+| POST /v1/account/recovery/rotate/begin | full | expected_version, recovery_record, recovery_blob | 204 |
+| POST /v1/account/recovery/disable | full | none | 204 |
+
+All are signed. All refuse a query string. All use the request MAC from
+part 2.
+
+### Failure cases
+
+- If rotation never runs, the old phrase still works. The user must rotate
+  to replace it; the password reset itself is complete.
+- If step 6 fails because the pending change expires before the new password
+  is proven, nothing changed. The user starts over at step 3.
+- If step 10 fails after step 6 succeeded, the password is new and the
+  phrase is old. Both still work; the client reports it and offers to retry
+  rotation.
+- A concurrent password change or recovery reset on another device is
+  serialised by the pending flag: only one can be pending at a time. Trying
+  to start a second gives 409 conflict.
+- A recovery session that tries to read the account blobs, or a full session
+  that tries POST /v1/recovery/password/*, is refused with 401.
+- Reading /v1/account/recovery/blob or rotating when recovery is not set up
+  gives 404 with error code "recovery_not_set_up".
+
+### Store changes
+
+- ReplaceRecovery gains an expectedVersion argument, so a rotation from an
+  out-of-date version gives ErrConflict. Nothing else in the store changes.
+- DeleteRecovery is used unchanged.
+- The pending mechanism from part 5 is reused as-is.

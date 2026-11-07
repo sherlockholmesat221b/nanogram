@@ -12,6 +12,7 @@ import (
 func (m *MemStore) ReplaceRecovery(
 	ctx context.Context,
 	userID []byte,
+	expectedVersion uint64,
 	rec store.OpaqueRecord,
 	blob store.Blob,
 ) error {
@@ -34,33 +35,32 @@ func (m *MemStore) ReplaceRecovery(
 		return store.ErrConflict
 	}
 
-	var maxVer uint64
+	var currentVersion uint64
 	hasAny := false
 	for key, existing := range m.blobs {
 		if key.userID == id && key.kind == store.BlobKindRecovery && !existing.Pending {
 			hasAny = true
-			if existing.Version > maxVer {
-				maxVer = existing.Version
+			if existing.Version > currentVersion {
+				currentVersion = existing.Version
 			}
 		}
 	}
-
-	expectedVersion := uint64(1)
-	if hasAny {
-		expectedVersion = maxVer + 1
+	if !hasAny {
+		currentVersion = 0
 	}
 
-	if blob.Version != expectedVersion {
+	if currentVersion != expectedVersion {
+		return store.ErrConflict
+	}
+	if expectedVersion == ^uint64(0) || blob.Version != expectedVersion+1 {
 		return store.ErrConflict
 	}
 
-	// Delete old current recovery opaque record if any
 	oldOpaqueKey := opaqueKey{
 		userID:  id,
 		kind:    "recovery",
 		pending: false,
 	}
-	delete(m.opaque, oldOpaqueKey)
 
 	newBlobKey := blobKey{
 		userID:  id,
@@ -71,6 +71,7 @@ func (m *MemStore) ReplaceRecovery(
 		return store.ErrConflict
 	}
 
+	delete(m.opaque, oldOpaqueKey)
 	m.opaque[oldOpaqueKey] = cloneOpaque(rec)
 	m.blobs[newBlobKey] = cloneBlob(blob)
 	return nil

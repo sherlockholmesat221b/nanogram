@@ -274,3 +274,68 @@ func (t *Transport) PasswordBegin(ctx context.Context, sign client.Signer, expec
 		KEK:             wire.BlobFromUpload(kek),
 	}, http.StatusNoContent, nil)
 }
+
+// RecoveryBlob implements client.Transport. It sends a signed GET to either
+// the recovery or the account recovery route, chosen by r.Path.
+func (t *Transport) RecoveryBlob(ctx context.Context, r service.AuthRequest) (service.RecoveryViewResult, error) {
+	if !strings.HasPrefix(r.Path, "/") || strings.ContainsAny(r.Path, "?#") {
+		return service.RecoveryViewResult{}, errors.New("invalid request path")
+	}
+
+	headers := signatureHeaders(r)
+
+	var res wire.RecoveryBlobsResponse
+	if err := t.do(ctx, r.Method, r.Path, headers, r.Body, http.StatusOK, service.ErrUnauthorized, &res); err != nil {
+		return service.RecoveryViewResult{}, err
+	}
+
+	if len(res.Blobs) != 1 {
+		return service.RecoveryViewResult{}, fmt.Errorf("%w: unexpected blobs", client.ErrProtocol)
+	}
+	recovery, err := res.Blobs[0].ToInfo()
+	if err != nil {
+		return service.RecoveryViewResult{}, fmt.Errorf("%w: %v", client.ErrProtocol, err)
+	}
+	header, err := res.KEKHeader.ToService()
+	if err != nil {
+		return service.RecoveryViewResult{}, fmt.Errorf("%w: %v", client.ErrProtocol, err)
+	}
+
+	return service.RecoveryViewResult{Recovery: recovery, KEKHeader: header}, nil
+}
+
+func (t *Transport) RecoveryPasswordStart(ctx context.Context, sign client.Signer, passwordReq []byte) ([]byte, error) {
+	var res wire.PasswordStartResponse
+	if err := t.signedPost(ctx, sign, wire.PathRecoveryPasswordStart, wire.PasswordStartRequest{PasswordRequest: passwordReq}, http.StatusOK, &res); err != nil {
+		return nil, err
+	}
+	return res.PasswordResponse, nil
+}
+
+func (t *Transport) RecoveryPasswordBegin(ctx context.Context, sign client.Signer, expectedVersion uint64, record []byte, kek service.BlobUpload) error {
+	return t.signedPost(ctx, sign, wire.PathRecoveryPasswordBegin, wire.PasswordBeginRequest{
+		ExpectedVersion: expectedVersion,
+		Record:          record,
+		KEK:             wire.BlobFromUpload(kek),
+	}, http.StatusNoContent, nil)
+}
+
+func (t *Transport) RecoveryRotateStart(ctx context.Context, sign client.Signer, recoveryReq []byte) ([]byte, error) {
+	var res wire.RecoveryRotateStartResponse
+	if err := t.signedPost(ctx, sign, wire.PathRecoveryRotateStart, wire.RecoveryRotateStartRequest{RecoveryRequest: recoveryReq}, http.StatusOK, &res); err != nil {
+		return nil, err
+	}
+	return res.RecoveryResponse, nil
+}
+
+func (t *Transport) RecoveryRotateBegin(ctx context.Context, sign client.Signer, expectedVersion uint64, record []byte, blob service.BlobUpload) error {
+	return t.signedPost(ctx, sign, wire.PathRecoveryRotateBegin, wire.RecoveryRotateBeginRequest{
+		ExpectedVersion: expectedVersion,
+		RecoveryRecord:  record,
+		RecoveryBlob:    wire.BlobFromUpload(blob),
+	}, http.StatusNoContent, nil)
+}
+
+func (t *Transport) RecoveryDisable(ctx context.Context, sign client.Signer) error {
+	return t.signedPost(ctx, sign, wire.PathRecoveryDisable, struct{}{}, http.StatusNoContent, nil)
+}

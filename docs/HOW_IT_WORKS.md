@@ -63,7 +63,11 @@ If step 4 never happens, the pending change expires and nothing changed. This is
 
 ## Recovery
 
-At registration the client can create a spare key as 24 words. The server stores a second OPAQUE record for it (the recovery credential) and a copy of the KEK locked under it. Logging in with the recovery kind gives a limited "recovery" scope session. Resetting the password from there is not built yet.
+At registration the client can create a spare key as 24 words. The server stores a second OPAQUE record for it (the recovery credential) and a copy of the KEK locked under it. Logging in with the recovery kind gives a limited "recovery" scope session.
+
+Resetting the password from a recovery session reuses the password change: only the KEK blob is re-wrapped, under a key made from the new password. The same pending mechanism proves the new password and ends every older session. After the change commits, the client rotates the recovery key: a new 24 word phrase, a new OPAQUE credential, and a new recovery blob holding the same KEK. The old phrase stops working. The new phrase is shown once.
+
+A user who has a full session can also disable recovery entirely. After that, a forgotten password means lost data.
 
 ## Where the code lives
 
@@ -89,7 +93,8 @@ About 5,550 lines of logic and 7,860 lines of tests in total. The part that deci
 - Blob associated data binds user, kind, version and the previous hash.
 - Identities in OPAQUE: client identity is the user ID (or the recovery credential ID), server identity is nil.
 - A password change replaces the KEK blob, not the KEK. Every older session ends, and only after the new password is proven.
+- A recovery reset re-wraps the same KEK. Rotation replaces the phrase, not the KEK. The old phrase stops working only after rotation, never before.
 
 ## Not built yet
 
-The MariaDB store, rate limiting, the recovery reset, and everything about messages.
+The MariaDB store, rate limiting, server key pinning, display names, and everything about messages.

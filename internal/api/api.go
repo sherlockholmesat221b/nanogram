@@ -36,6 +36,12 @@ type Service interface {
 	CurrentBlobs(ctx context.Context, userID []byte, kinds ...byte) ([]service.BlobInfo, error)
 	PasswordChangeStart(ctx context.Context, userID, request []byte) ([]byte, error)
 	PasswordChangeBegin(ctx context.Context, userID []byte, expectedVersion uint64, record []byte, kek service.BlobUpload) error
+	RecoveryView(ctx context.Context, userID []byte) (service.RecoveryViewResult, error)
+	RecoveryPasswordStart(ctx context.Context, userID, passwordReq []byte) ([]byte, error)
+	RecoveryPasswordBegin(ctx context.Context, userID []byte, expectedVersion uint64, record []byte, kek service.BlobUpload) error
+	RecoveryRotateStart(ctx context.Context, userID, recoveryReq []byte) ([]byte, error)
+	RecoveryRotateBegin(ctx context.Context, userID []byte, expectedVersion uint64, record []byte, blob service.BlobUpload) error
+	RecoveryDisable(ctx context.Context, userID []byte) error
 }
 
 type handler struct {
@@ -61,6 +67,12 @@ func New(svc Service, logger *log.Logger) http.Handler {
 	mux.HandleFunc("GET "+wire.PathRecoveryBlob, h.recoveryBlob)
 	mux.HandleFunc("POST "+wire.PathPasswordStart, h.passwordStart)
 	mux.HandleFunc("POST "+wire.PathPasswordBegin, h.passwordBegin)
+	mux.HandleFunc("GET "+wire.PathAccountRecoveryBlob, h.accountRecoveryBlob)
+	mux.HandleFunc("POST "+wire.PathRecoveryPasswordStart, h.recoveryPasswordStart)
+	mux.HandleFunc("POST "+wire.PathRecoveryPasswordBegin, h.recoveryPasswordBegin)
+	mux.HandleFunc("POST "+wire.PathRecoveryRotateStart, h.recoveryRotateStart)
+	mux.HandleFunc("POST "+wire.PathRecoveryRotateBegin, h.recoveryRotateBegin)
+	mux.HandleFunc("POST "+wire.PathRecoveryDisable, h.recoveryDisable)
 
 	return secureHeaders(mux)
 }
@@ -151,6 +163,9 @@ func (h *handler) fail(w http.ResponseWriter, err error) {
 
 	case errors.Is(err, service.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict")
+
+	case errors.Is(err, service.ErrRecoveryNotSetUp):
+		writeError(w, http.StatusNotFound, "recovery_not_set_up")
 
 	default:
 		h.log.Printf("internal error: %v", err)
@@ -253,12 +268,33 @@ func (h *handler) accountBlobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) recoveryBlob(w http.ResponseWriter, r *http.Request) {
-	session, _, ok := h.authenticated(w, r, "recovery")
+	h.recoveryBlobFor(w, r, "recovery")
+}
+
+func (h *handler) accountRecoveryBlob(w http.ResponseWriter, r *http.Request) {
+	h.recoveryBlobFor(w, r, "full")
+}
+
+func (h *handler) recoveryBlobFor(w http.ResponseWriter, r *http.Request, scope string) {
+	session, _, ok := h.authenticated(w, r, scope)
 	if !ok {
 		return
 	}
 
-	h.writeBlobs(w, r, session.UserID, store.BlobKindRecovery)
+	view, err := h.svc.RecoveryView(r.Context(), session.UserID)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, wire.RecoveryBlobsResponse{
+		Blobs: []wire.Blob{wire.BlobFromInfo(view.Recovery)},
+		KEKHeader: wire.BlobHeader{
+			Version:  view.KEKHeader.Version,
+			PrevHash: append([]byte(nil), view.KEKHeader.PrevHash[:]...),
+			Hash:     append([]byte(nil), view.KEKHeader.Hash[:]...),
+		},
+	})
 }
 
 func (h *handler) writeBlobs(
@@ -279,6 +315,110 @@ func (h *handler) writeBlobs(
 	}
 
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *handler) recoveryPasswordStart(w http.ResponseWriter, r *http.Request) {
+	session, body, ok := h.authenticated(w, r, "recovery")
+	if !ok {
+		return
+	}
+
+	var req wire.PasswordStartRequest
+	if !decodeSigned(w, r, body, &req) {
+		return
+	}
+
+	response, err := h.svc.RecoveryPasswordStart(r.Context(), session.UserID, req.PasswordRequest)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, wire.PasswordStartResponse{PasswordResponse: response})
+}
+
+func (h *handler) recoveryPasswordBegin(w http.ResponseWriter, r *http.Request) {
+	session, body, ok := h.authenticated(w, r, "recovery")
+	if !ok {
+		return
+	}
+
+	var req wire.PasswordBeginRequest
+	if !decodeSigned(w, r, body, &req) {
+		return
+	}
+
+	kek, err := req.KEK.ToUpload()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	if err := h.svc.RecoveryPasswordBegin(r.Context(), session.UserID, req.ExpectedVersion, req.Record, kek); err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) recoveryRotateStart(w http.ResponseWriter, r *http.Request) {
+	session, body, ok := h.authenticated(w, r, "full")
+	if !ok {
+		return
+	}
+
+	var req wire.RecoveryRotateStartRequest
+	if !decodeSigned(w, r, body, &req) {
+		return
+	}
+
+	response, err := h.svc.RecoveryRotateStart(r.Context(), session.UserID, req.RecoveryRequest)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, wire.RecoveryRotateStartResponse{RecoveryResponse: response})
+}
+
+func (h *handler) recoveryRotateBegin(w http.ResponseWriter, r *http.Request) {
+	session, body, ok := h.authenticated(w, r, "full")
+	if !ok {
+		return
+	}
+
+	var req wire.RecoveryRotateBeginRequest
+	if !decodeSigned(w, r, body, &req) {
+		return
+	}
+
+	blob, err := req.RecoveryBlob.ToUpload()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	if err := h.svc.RecoveryRotateBegin(r.Context(), session.UserID, req.ExpectedVersion, req.RecoveryRecord, blob); err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) recoveryDisable(w http.ResponseWriter, r *http.Request) {
+	session, _, ok := h.authenticated(w, r, "full")
+	if !ok {
+		return
+	}
+
+	if err := h.svc.RecoveryDisable(r.Context(), session.UserID); err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // authenticated reads the signature headers and the body, and asks the service

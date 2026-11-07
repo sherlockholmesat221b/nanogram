@@ -33,8 +33,14 @@ type stubService struct {
 	authenticate   func(context.Context, service.AuthRequest, string) (store.Session, error)
 	currentBlobs   func(context.Context, []byte, ...byte) ([]service.BlobInfo, error)
 
-	passwordStart func(context.Context, []byte, []byte) ([]byte, error)
-	passwordBegin func(context.Context, []byte, uint64, []byte, service.BlobUpload) error
+	passwordStart         func(context.Context, []byte, []byte) ([]byte, error)
+	passwordBegin         func(context.Context, []byte, uint64, []byte, service.BlobUpload) error
+	recoveryView          func(context.Context, []byte) (service.RecoveryViewResult, error)
+	recoveryPasswordStart func(context.Context, []byte, []byte) ([]byte, error)
+	recoveryPasswordBegin func(context.Context, []byte, uint64, []byte, service.BlobUpload) error
+	recoveryRotateStart   func(context.Context, []byte, []byte) ([]byte, error)
+	recoveryRotateBegin   func(context.Context, []byte, uint64, []byte, service.BlobUpload) error
+	recoveryDisable       func(context.Context, []byte) error
 }
 
 func (s *stubService) RegisterStart(ctx context.Context, username string, p, r []byte) (service.RegisterStartResult, error) {
@@ -486,7 +492,7 @@ func TestQueryStringsAreRefusedOnSignedRoutes(t *testing.T) {
 func TestSignedRequestsReachTheServiceExactly(t *testing.T) {
 	var gotRequest service.AuthRequest
 	var gotScope string
-	var gotUser, gotKinds []byte
+	var gotUser, gotKinds, gotViewUser []byte
 
 	svc := &stubService{
 		authenticate: func(_ context.Context, r service.AuthRequest, scope string) (store.Session, error) {
@@ -497,6 +503,13 @@ func TestSignedRequestsReachTheServiceExactly(t *testing.T) {
 			gotUser, gotKinds = userID, kinds
 			return []service.BlobInfo{
 				{Kind: kinds[0], Version: 3, PrevHash: [32]byte{1}, Data: []byte("data")},
+			}, nil
+		},
+		recoveryView: func(_ context.Context, userID []byte) (service.RecoveryViewResult, error) {
+			gotViewUser = userID
+			return service.RecoveryViewResult{
+				Recovery:  service.BlobInfo{Kind: store.BlobKindRecovery, Version: 1, Data: []byte("rec")},
+				KEKHeader: service.BlobHeader{Version: 2, Hash: [32]byte{3}},
 			}, nil
 		},
 	}
@@ -532,6 +545,7 @@ func TestSignedRequestsReachTheServiceExactly(t *testing.T) {
 		t.Fatalf("unexpected response %+v", res)
 	}
 
+	// The recovery route now goes through RecoveryView, not CurrentBlobs.
 	rec = serve(h, "GET", wire.PathRecoveryBlob, "", headers)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("recovery route: status %d, body %s", rec.Code, rec.Body.String())
@@ -539,8 +553,16 @@ func TestSignedRequestsReachTheServiceExactly(t *testing.T) {
 	if gotScope != "recovery" || gotRequest.Path != wire.PathRecoveryBlob {
 		t.Fatalf("recovery route used scope %q and path %q", gotScope, gotRequest.Path)
 	}
-	if !bytes.Equal(gotKinds, []byte{store.BlobKindRecovery}) {
-		t.Fatalf("recovery route asked for kinds %x", gotKinds)
+	if !bytes.Equal(gotViewUser, []byte{7, 7}) {
+		t.Fatalf("recovery view asked for user %x", gotViewUser)
+	}
+
+	var rres wire.RecoveryBlobsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &rres); err != nil {
+		t.Fatal(err)
+	}
+	if len(rres.Blobs) != 1 || rres.KEKHeader.Version != 2 {
+		t.Fatalf("unexpected recovery response %+v", rres)
 	}
 }
 
@@ -574,6 +596,48 @@ func (s *stubService) PasswordChangeBegin(ctx context.Context, userID []byte, ex
 		return errNotSet
 	}
 	return s.passwordBegin(ctx, userID, expectedVersion, record, kek)
+}
+
+func (s *stubService) RecoveryView(ctx context.Context, userID []byte) (service.RecoveryViewResult, error) {
+	if s.recoveryView == nil {
+		return service.RecoveryViewResult{}, errNotSet
+	}
+	return s.recoveryView(ctx, userID)
+}
+
+func (s *stubService) RecoveryPasswordStart(ctx context.Context, userID, passwordReq []byte) ([]byte, error) {
+	if s.recoveryPasswordStart == nil {
+		return nil, errNotSet
+	}
+	return s.recoveryPasswordStart(ctx, userID, passwordReq)
+}
+
+func (s *stubService) RecoveryPasswordBegin(ctx context.Context, userID []byte, expectedVersion uint64, record []byte, kek service.BlobUpload) error {
+	if s.recoveryPasswordBegin == nil {
+		return errNotSet
+	}
+	return s.recoveryPasswordBegin(ctx, userID, expectedVersion, record, kek)
+}
+
+func (s *stubService) RecoveryRotateStart(ctx context.Context, userID, recoveryReq []byte) ([]byte, error) {
+	if s.recoveryRotateStart == nil {
+		return nil, errNotSet
+	}
+	return s.recoveryRotateStart(ctx, userID, recoveryReq)
+}
+
+func (s *stubService) RecoveryRotateBegin(ctx context.Context, userID []byte, expectedVersion uint64, record []byte, blob service.BlobUpload) error {
+	if s.recoveryRotateBegin == nil {
+		return errNotSet
+	}
+	return s.recoveryRotateBegin(ctx, userID, expectedVersion, record, blob)
+}
+
+func (s *stubService) RecoveryDisable(ctx context.Context, userID []byte) error {
+	if s.recoveryDisable == nil {
+		return errNotSet
+	}
+	return s.recoveryDisable(ctx, userID)
 }
 
 // signedJSON posts a JSON body with signature headers.
@@ -758,5 +822,37 @@ func TestAChangeThatClashesIsReported(t *testing.T) {
 
 	if rec.Code != http.StatusConflict || errorCode(t, rec) != "conflict" {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRecoveryBlobReturnsTheKEKHeader(t *testing.T) {
+	svc := &stubService{
+		authenticate: authenticatedAs([]byte{7}, nil, nil),
+		recoveryView: func(_ context.Context, userID []byte) (service.RecoveryViewResult, error) {
+			if !bytes.Equal(userID, []byte{7}) {
+				t.Fatalf("user %x", userID)
+			}
+			return service.RecoveryViewResult{
+				Recovery: service.BlobInfo{Kind: 4, Version: 1, Data: []byte("rec")},
+				KEKHeader: service.BlobHeader{
+					Version:  3,
+					PrevHash: [32]byte{1},
+					Hash:     [32]byte{2},
+				},
+			}, nil
+		},
+	}
+
+	rec := serve(New(svc, nil), "GET", wire.PathRecoveryBlob, "", signedHeaders([]byte{1}, []byte{2}, 1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+
+	var res wire.RecoveryBlobsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Blobs) != 1 || res.KEKHeader.Version != 3 || len(res.KEKHeader.Hash) != 32 {
+		t.Fatalf("unexpected response %+v", res)
 	}
 }

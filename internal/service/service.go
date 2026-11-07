@@ -34,6 +34,9 @@ var (
 
 	// ErrInternal indicates an internal service failure.
 	ErrInternal = errors.New("internal error")
+
+	// ErrRecoveryNotSetUp indicates that the account has no recovery set up.
+	ErrRecoveryNotSetUp = errors.New("recovery is not set up")
 )
 
 // Service implements the application service layer.

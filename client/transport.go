@@ -24,6 +24,13 @@ type Transport interface {
 	// sign, so the signature covers them.
 	PasswordStart(ctx context.Context, sign Signer, passwordReq []byte) ([]byte, error)
 	PasswordBegin(ctx context.Context, sign Signer, expectedVersion uint64, record []byte, kek service.BlobUpload) error
+	// Recovery reset and rotation.
+	RecoveryBlob(ctx context.Context, r service.AuthRequest) (service.RecoveryViewResult, error)
+	RecoveryPasswordStart(ctx context.Context, sign Signer, passwordReq []byte) ([]byte, error)
+	RecoveryPasswordBegin(ctx context.Context, sign Signer, expectedVersion uint64, record []byte, kek service.BlobUpload) error
+	RecoveryRotateStart(ctx context.Context, sign Signer, recoveryReq []byte) ([]byte, error)
+	RecoveryRotateBegin(ctx context.Context, sign Signer, expectedVersion uint64, record []byte, blob service.BlobUpload) error
+	RecoveryDisable(ctx context.Context, sign Signer) error
 }
 
 // Signer signs one request. Session.Sign is a Signer.

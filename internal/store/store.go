@@ -140,9 +140,14 @@ type Store interface {
 		b Blob,
 	) error
 
+	// ReplaceRecovery replaces the recovery record and blob atomically,
+	// but only if the current recovery blob is at expectedVersion. The new
+	// blob must be version expectedVersion+1. expectedVersion 0 means there
+	// is no current recovery (never set up, or disabled).
 	ReplaceRecovery(
 		ctx context.Context,
 		userID []byte,
+		expectedVersion uint64,
 		rec OpaqueRecord,
 		blob Blob,
 	) error

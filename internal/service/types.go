@@ -80,3 +80,17 @@ type AuthRequest struct {
 	Body      []byte
 	MAC       []byte
 }
+
+// BlobHeader is a blob's metadata without its data.
+type BlobHeader struct {
+	Version  uint64
+	PrevHash [32]byte
+	Hash     [32]byte
+}
+
+// RecoveryViewResult is what a recovery-blob read returns: the recovery blob
+// and the current KEK blob's header.
+type RecoveryViewResult struct {
+	Recovery  BlobInfo
+	KEKHeader BlobHeader
+}

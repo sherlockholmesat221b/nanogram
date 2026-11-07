@@ -27,7 +27,7 @@ func TestReplaceRecovery(t *testing.T) {
 		Data:    []byte("recblob1"),
 	}
 
-	if err := m.ReplaceRecovery(ctx, uid, rec, blob); err != nil {
+	if err := m.ReplaceRecovery(ctx, uid, 0, rec, blob); err != nil {
 		t.Fatalf("replace first recovery: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestReplaceRecovery(t *testing.T) {
 		Version: 2,
 		Data:    []byte("recblob2"),
 	}
-	if err := m.ReplaceRecovery(ctx, uid, rec2, blob2); err != nil {
+	if err := m.ReplaceRecovery(ctx, uid, 1, rec2, blob2); err != nil {
 		t.Fatalf("replace second recovery: %v", err)
 	}
 
@@ -85,7 +85,7 @@ func TestReplaceRecovery(t *testing.T) {
 		Version: 4,
 		Data:    []byte("wrong-version"),
 	}
-	if err := m.ReplaceRecovery(ctx, uid, rec2, wrongVersionBlob); !errors.Is(err, store.ErrConflict) {
+	if err := m.ReplaceRecovery(ctx, uid, 2, rec2, wrongVersionBlob); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("wrong recovery version error = %v, want ErrConflict", err)
 	}
 
@@ -101,7 +101,7 @@ func TestReplaceRecovery(t *testing.T) {
 		Version: 1,
 		Data:    []byte("missing"),
 	}
-	if err := m.ReplaceRecovery(ctx, missingUID, missingRec, missingBlob); !errors.Is(err, store.ErrNotFound) {
+	if err := m.ReplaceRecovery(ctx, missingUID, 0, missingRec, missingBlob); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing user error = %v, want ErrNotFound", err)
 	}
 }
@@ -122,7 +122,7 @@ func TestDeleteRecovery(t *testing.T) {
 		Version: 1,
 		Data:    []byte("recovery-blob"),
 	}
-	if err := m.ReplaceRecovery(ctx, uid, rec, blob); err != nil {
+	if err := m.ReplaceRecovery(ctx, uid, 0, rec, blob); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,5 +138,29 @@ func TestDeleteRecovery(t *testing.T) {
 
 	if err := m.DeleteRecovery(ctx, uid); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("delete missing recovery error = %v", err)
+	}
+}
+
+func TestReplaceRecoveryExpectedVersion(t *testing.T) {
+	m := New()
+	uid := id(1)
+	createUser(t, m, "alice", uid)
+
+	rec := store.OpaqueRecord{UserID: uid, Kind: "recovery", Record: []byte("rec1")}
+	blob := store.Blob{UserID: uid, Kind: store.BlobKindRecovery, Version: 1, Data: []byte("blob1")}
+	if err := m.ReplaceRecovery(ctx, uid, 0, rec, blob); err != nil {
+		t.Fatalf("first setup: %v", err)
+	}
+
+	// Client thinks version is 0, but the current is 1.
+	next := store.Blob{UserID: uid, Kind: store.BlobKindRecovery, Version: 1, Data: []byte("stale")}
+	if err := m.ReplaceRecovery(ctx, uid, 0, rec, next); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale expected version: %v", err)
+	}
+
+	// Correct.
+	ok := store.Blob{UserID: uid, Kind: store.BlobKindRecovery, Version: 2, Data: []byte("blob2")}
+	if err := m.ReplaceRecovery(ctx, uid, 1, rec, ok); err != nil {
+		t.Fatalf("correct expected version: %v", err)
 	}
 }
