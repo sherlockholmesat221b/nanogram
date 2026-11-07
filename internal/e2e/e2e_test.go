@@ -311,3 +311,41 @@ func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestChangePasswordOverHTTP(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	pass := passphrase(t)
+
+	if _, err := s.client.Register(ctx, "alice", pass, pass, true); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := s.client.Login(ctx, "alice", pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale := session.Sign("GET", wire.PathAccountBlobs, nil)
+
+	const next = "Xq7#mP2$vL9@wR4!tN8z"
+
+	fresh, err := s.client.ChangePassword(ctx, session, next, next)
+	if err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+
+	if _, err := s.client.Login(ctx, "alice", pass); !errors.Is(err, client.ErrLoginFailed) {
+		t.Fatalf("old password: error = %v", err)
+	}
+	if _, err := s.client.Login(ctx, "alice", next); err != nil {
+		t.Fatalf("new password: %v", err)
+	}
+
+	if _, err := s.transport.AccountBlobs(ctx, stale); !errors.Is(err, service.ErrUnauthorized) {
+		t.Fatalf("old session: error = %v, want ErrUnauthorized", err)
+	}
+	if blobs, err := s.transport.AccountBlobs(ctx, fresh.Sign("GET", wire.PathAccountBlobs, nil)); err != nil || len(blobs) != 3 {
+		t.Fatalf("new session: %d blobs, %v", len(blobs), err)
+	}
+}

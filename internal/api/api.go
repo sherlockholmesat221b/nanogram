@@ -6,6 +6,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -33,6 +34,8 @@ type Service interface {
 	LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.SessionInfo, error)
 	Authenticate(ctx context.Context, r service.AuthRequest, scope string) (store.Session, error)
 	CurrentBlobs(ctx context.Context, userID []byte, kinds ...byte) ([]service.BlobInfo, error)
+	PasswordChangeStart(ctx context.Context, userID, request []byte) ([]byte, error)
+	PasswordChangeBegin(ctx context.Context, userID []byte, expectedVersion uint64, record []byte, kek service.BlobUpload) error
 }
 
 type handler struct {
@@ -56,6 +59,8 @@ func New(svc Service, logger *log.Logger) http.Handler {
 	mux.HandleFunc("POST "+wire.PathLoginFinish, h.loginFinish)
 	mux.HandleFunc("GET "+wire.PathAccountBlobs, h.accountBlobs)
 	mux.HandleFunc("GET "+wire.PathRecoveryBlob, h.recoveryBlob)
+	mux.HandleFunc("POST "+wire.PathPasswordStart, h.passwordStart)
+	mux.HandleFunc("POST "+wire.PathPasswordBegin, h.passwordBegin)
 
 	return secureHeaders(mux)
 }
@@ -143,6 +148,9 @@ func (h *handler) fail(w http.ResponseWriter, err error) {
 
 	case errors.Is(err, service.ErrUsernameTaken):
 		writeError(w, http.StatusConflict, "username_taken")
+
+	case errors.Is(err, service.ErrConflict):
+		writeError(w, http.StatusConflict, "conflict")
 
 	default:
 		h.log.Printf("internal error: %v", err)
@@ -233,7 +241,7 @@ func (h *handler) loginFinish(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) accountBlobs(w http.ResponseWriter, r *http.Request) {
-	session, ok := h.authenticated(w, r, "full")
+	session, _, ok := h.authenticated(w, r, "full")
 	if !ok {
 		return
 	}
@@ -245,7 +253,7 @@ func (h *handler) accountBlobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) recoveryBlob(w http.ResponseWriter, r *http.Request) {
-	session, ok := h.authenticated(w, r, "recovery")
+	session, _, ok := h.authenticated(w, r, "recovery")
 	if !ok {
 		return
 	}
@@ -281,36 +289,36 @@ func (h *handler) authenticated(
 	w http.ResponseWriter,
 	r *http.Request,
 	scope string,
-) (store.Session, bool) {
+) (store.Session, []byte, bool) {
 	var none store.Session
 
 	if r.URL.RawQuery != "" {
 		writeError(w, http.StatusBadRequest, "invalid_request")
-		return none, false
+		return none, nil, false
 	}
 
 	sessionID, err := base64.StdEncoding.DecodeString(r.Header.Get(wire.HeaderSession))
 	if err != nil || len(sessionID) == 0 {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return none, false
+		return none, nil, false
 	}
 
 	mac, err := base64.StdEncoding.DecodeString(r.Header.Get(wire.HeaderMAC))
 	if err != nil || len(mac) == 0 {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return none, false
+		return none, nil, false
 	}
 
 	counter, err := strconv.ParseUint(r.Header.Get(wire.HeaderCounter), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return none, false
+		return none, nil, false
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeDecodeError(w, err)
-		return none, false
+		return none, nil, false
 	}
 
 	session, err := h.svc.Authenticate(r.Context(), service.AuthRequest{
@@ -323,8 +331,78 @@ func (h *handler) authenticated(
 	}, scope)
 	if err != nil {
 		h.fail(w, err)
-		return none, false
+		return none, nil, false
 	}
 
-	return session, true
+	return session, body, true
+}
+
+// decodeSigned decodes the body of a signed request. authenticated has already
+// read the body and checked its signature. The rules are those of decodeJSON.
+func decodeSigned(w http.ResponseWriter, r *http.Request, body []byte, dst any) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type")
+		return false
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(dst); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return false
+	}
+
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return false
+	}
+
+	return true
+}
+
+func (h *handler) passwordStart(w http.ResponseWriter, r *http.Request) {
+	session, body, ok := h.authenticated(w, r, "full")
+	if !ok {
+		return
+	}
+
+	var req wire.PasswordStartRequest
+	if !decodeSigned(w, r, body, &req) {
+		return
+	}
+
+	response, err := h.svc.PasswordChangeStart(r.Context(), session.UserID, req.PasswordRequest)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, wire.PasswordStartResponse{PasswordResponse: response})
+}
+
+func (h *handler) passwordBegin(w http.ResponseWriter, r *http.Request) {
+	session, body, ok := h.authenticated(w, r, "full")
+	if !ok {
+		return
+	}
+
+	var req wire.PasswordBeginRequest
+	if !decodeSigned(w, r, body, &req) {
+		return
+	}
+
+	kek, err := req.KEK.ToUpload()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+
+	if err := h.svc.PasswordChangeBegin(r.Context(), session.UserID, req.ExpectedVersion, req.Record, kek); err != nil {
+		h.fail(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

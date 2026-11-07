@@ -35,7 +35,7 @@ func (s *Service) LoginStart(
 ) (LoginStartResult, error) {
 	var result LoginStartResult
 
-	if kind != "password" && kind != "recovery" {
+	if kind != "password" && kind != "recovery" && kind != "pending" {
 		return result, ErrInvalidRequest
 	}
 
@@ -65,7 +65,16 @@ func (s *Service) LoginStart(
 		// who has switched recovery off.
 		userID = user.ID
 
-		record, err := s.store.CurrentOpaqueRecord(ctx, user.ID, kind)
+		var record store.OpaqueRecord
+		var err error
+
+		if kind == "pending" {
+			// A password change that has begun: the proof of the new
+			// password is checked against its pending record.
+			record, err = s.store.PendingOpaqueRecord(ctx, user.ID, "password", s.now())
+		} else {
+			record, err = s.store.CurrentOpaqueRecord(ctx, user.ID, kind)
+		}
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			// No record of this kind: stored stays nil and the OPAQUE
@@ -139,7 +148,7 @@ func (s *Service) LoginFinish(
 		return result, ErrInternal
 	}
 
-	if loginState.Kind != "password" && loginState.Kind != "recovery" {
+	if loginState.Kind != "password" && loginState.Kind != "recovery" && loginState.Kind != "pending" {
 		return result, ErrLoginFailed
 	}
 
@@ -164,6 +173,17 @@ func (s *Service) LoginFinish(
 	sessionID := make([]byte, 32)
 	if _, err := io.ReadFull(s.rand, sessionID); err != nil {
 		return result, ErrInternal
+	}
+
+	if loginState.Kind == "pending" {
+		// Proof of the new password completes the change, and every older
+		// session ends.
+		if err := s.store.CommitPasswordChange(ctx, user.ID, now); err != nil {
+			return result, ErrLoginFailed
+		}
+		if err := s.store.DeleteSessionsForUser(ctx, user.ID); err != nil {
+			return result, ErrInternal
+		}
 	}
 
 	scope := "full"

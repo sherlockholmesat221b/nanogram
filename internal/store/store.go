@@ -100,6 +100,15 @@ type Store interface {
 		kind string,
 	) (OpaqueRecord, error)
 
+	// PendingOpaqueRecord returns the record of a password change that has
+	// begun and has not expired.
+	PendingOpaqueRecord(
+		ctx context.Context,
+		userID []byte,
+		kind string,
+		now time.Time,
+	) (OpaqueRecord, error)
+
 	CurrentBlob(
 		ctx context.Context,
 		userID []byte,

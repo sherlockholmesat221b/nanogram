@@ -78,4 +78,4 @@ About 2,750 lines of logic and 3,800 lines of tests in total. The part that deci
 
 ## Not built yet
 
-The HTTP layer (wire types and handlers), the client library (key generation, blob handling, checking that the server has not rolled data back), the command-line client, the MariaDB store, rate limiting, password change and recovery reset, and everything about messages.
+The HTTP layer (wire types and handlers), the client library (key generation, blob handling, checking that the server has not rolled data back), the command-line client, the MariaDB store, rate limiting, the recovery reset, and everything about messages.

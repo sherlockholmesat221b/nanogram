@@ -18,4 +18,13 @@ type Transport interface {
 	LoginStart(ctx context.Context, username, kind string, ke1 []byte) (service.LoginStartResult, error)
 	LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.SessionInfo, error)
 	AccountBlobs(ctx context.Context, r service.AuthRequest) ([]service.BlobInfo, error)
+
+	// PasswordStart and PasswordBegin are the two signed steps of a password
+	// change. The transport hands the exact bytes it will send as the body to
+	// sign, so the signature covers them.
+	PasswordStart(ctx context.Context, sign Signer, passwordReq []byte) ([]byte, error)
+	PasswordBegin(ctx context.Context, sign Signer, expectedVersion uint64, record []byte, kek service.BlobUpload) error
 }
+
+// Signer signs one request. Session.Sign is a Signer.
+type Signer func(method, path string, body []byte) service.AuthRequest

@@ -184,6 +184,48 @@ func suggest() error {
 	return nil
 }
 
+// passwd changes the password: it logs in with the current one, then asks for
+// the new one twice.
+func passwd(ctx context.Context, o options) error {
+	c, err := newClient(o.server)
+	if err != nil {
+		return err
+	}
+
+	current, err := readSecret("Current password: ")
+	if err != nil {
+		return err
+	}
+
+	session, err := c.Login(ctx, o.user, current)
+	if err != nil {
+		if errors.Is(err, client.ErrLoginFailed) {
+			return client.ErrLoginFailed
+		}
+		return err
+	}
+	defer session.Wipe()
+
+	pass, err := readSecret("New password: ")
+	if err != nil {
+		return err
+	}
+
+	again, err := readSecret("Confirm the new password: ")
+	if err != nil {
+		return err
+	}
+
+	fresh, err := c.ChangePassword(ctx, session, pass, again)
+	if err != nil {
+		return err
+	}
+	fresh.Wipe()
+
+	fmt.Println("Password changed. Every other session has ended.")
+	return nil
+}
+
 // login logs in. With countBlobs it then asks for the blobs once more and
 // prints how many there are, otherwise it prints the user id and the scope.
 func login(ctx context.Context, o options, countBlobs bool) error {
@@ -230,7 +272,7 @@ func run(args []string) error {
 	fmt.Fprintln(os.Stderr, "ngcli is a test tool for developers. Do not use it for accounts you care about.")
 
 	if len(args) == 0 {
-		return errors.New("usage: ngcli <register|login|blobs> -user USER [-server URL], or ngcli suggest")
+		return errors.New("usage: ngcli <register|login|passwd|blobs> -user USER [-server URL], or ngcli suggest")
 	}
 
 	command := args[0]
@@ -249,10 +291,12 @@ func run(args []string) error {
 		return register(context.Background(), o)
 	case "login":
 		return login(context.Background(), o, false)
+	case "passwd":
+		return passwd(context.Background(), o)
 	case "blobs":
 		return login(context.Background(), o, true)
 	default:
-		return fmt.Errorf("unknown command %q (use register, login, blobs or suggest)", command)
+		return fmt.Errorf("unknown command %q (use register, login, passwd, blobs or suggest)", command)
 	}
 }
 

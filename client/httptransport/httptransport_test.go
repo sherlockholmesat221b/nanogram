@@ -3,6 +3,7 @@
 package httptransport
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -236,5 +237,107 @@ func TestRedirectsAreNeverFollowed(t *testing.T) {
 	}
 	if followed {
 		t.Fatal("the redirect was followed")
+	}
+}
+
+// TestSignedPostsAreSignedOverTheirBody checks the property the whole signing
+// scheme rests on: the bytes handed to the signer are the bytes the server sees.
+func TestSignedPostsAreSignedOverTheirBody(t *testing.T) {
+	tests := []struct {
+		name   string
+		call   func(*Transport, client.Signer) error
+		answer func(http.ResponseWriter)
+	}{
+		{
+			name: "PasswordStart",
+			call: func(tr *Transport, sign client.Signer) error {
+				_, err := tr.PasswordStart(context.Background(), sign, []byte{1, 2, 3})
+				return err
+			},
+			answer: func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"password_response":"AQ=="}`))
+			},
+		},
+		{
+			name: "PasswordBegin",
+			call: func(tr *Transport, sign client.Signer) error {
+				return tr.PasswordBegin(context.Background(), sign, 3,
+					[]byte{4, 5, 6},
+					service.BlobUpload{Kind: 1, Version: 4, PrevHash: [32]byte{7}, Data: []byte("kek")})
+			},
+			answer: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusNoContent)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				gotMethod, gotPath string
+				gotBody            []byte
+			)
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod, gotPath = r.Method, r.URL.Path
+				gotBody, _ = io.ReadAll(r.Body)
+				tt.answer(w)
+			}))
+			defer srv.Close()
+
+			var (
+				signerMethod, signerPath string
+				signerBody               []byte
+			)
+			sign := func(method, path string, body []byte) service.AuthRequest {
+				signerMethod, signerPath = method, path
+				signerBody = append([]byte(nil), body...)
+				return service.AuthRequest{
+					SessionID: []byte{1, 2, 3},
+					Counter:   42,
+					Method:    method,
+					Path:      path,
+					Body:      body,
+					MAC:       []byte{4, 5, 6},
+				}
+			}
+
+			if err := tt.call(New(srv.URL, srv.Client()), sign); err != nil {
+				t.Fatalf("call: %v", err)
+			}
+
+			if signerMethod != gotMethod || signerPath != gotPath || !bytes.Equal(signerBody, gotBody) {
+				t.Fatalf("signer saw %s %s %q, server saw %s %s %q",
+					signerMethod, signerPath, signerBody, gotMethod, gotPath, gotBody)
+			}
+		})
+	}
+}
+
+// TestAConflictIsMapped checks that a 409 conflict becomes ErrConflict, which
+// is what a password change returns when another change is already pending or
+// the expected version is out of date.
+func TestAConflictIsMapped(t *testing.T) {
+	srv := httptest.NewServer(answer(http.StatusConflict, `{"error":"conflict"}`))
+	defer srv.Close()
+
+	sign := func(method, path string, body []byte) service.AuthRequest {
+		return service.AuthRequest{
+			SessionID: []byte{1},
+			Counter:   1,
+			Method:    method,
+			Path:      path,
+			Body:      body,
+			MAC:       []byte{2},
+		}
+	}
+
+	err := New(srv.URL, srv.Client()).PasswordBegin(
+		context.Background(), sign, 1, []byte{1},
+		service.BlobUpload{Kind: 1, Version: 2},
+	)
+	if !errors.Is(err, service.ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict", err)
 	}
 }

@@ -265,3 +265,15 @@ Not yet decided: Unicode normalisation (NFC) of non-ASCII passwords, so the same
 
 - Usernames: 3 to 32 characters from a-z, A-Z, 0-9, underscore and dot. Names are matched without regard to case ("Alice" and "alice" are one account) and stored in lowercase. A separate display name can keep capitals later.
 - Passwords are chosen by the user. The client refuses a password whose estimated number of guesses is below 2^66, using the zxcvbn estimate with the username as a known word. A generated 7 word passphrase is only a suggestion. The server cannot see or check the password, so this is advice from the client, not a protocol rule.
+
+## Part 5: changing the password
+
+The user is logged in with a full session and holds the KEK. Only the KEK blob is replaced; the KEK, the MEK, the identity and the recovery blob stay as they are.
+
+1. POST /v1/account/password/start (signed, full): password_request, answer password_response. The server answers the OPAQUE registration request with the user id as the credential id, and keeps nothing.
+2. The client finishes OPAQUE locally: new record, new export key, new wrap key. It locks the same KEK under the new wrap key as KEK blob version n+1, with the hash of version n as its previous hash, and checks that it opens.
+3. POST /v1/account/password/begin (signed, full): expected_version (n), record, kek (the new blob). The server stores both as pending for 10 minutes, but only if the current KEK version is n and no change is already pending (otherwise 409 conflict). Logins still use the old password.
+4. The client proves the new password with a login of kind "pending" (login/start and login/finish as usual). The server checks the proof against the pending record. On success it makes the pending record and blob current, ends every older session, and opens a new full session.
+
+If step 4 never happens, the pending change expires and nothing has changed. A device that last saw version n and now sees n+1 with the right previous hash gets a notice, not an error.
+

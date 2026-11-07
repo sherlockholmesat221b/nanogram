@@ -32,6 +32,9 @@ type stubService struct {
 	loginFinish    func(context.Context, []byte, []byte) (service.SessionInfo, error)
 	authenticate   func(context.Context, service.AuthRequest, string) (store.Session, error)
 	currentBlobs   func(context.Context, []byte, ...byte) ([]service.BlobInfo, error)
+
+	passwordStart func(context.Context, []byte, []byte) ([]byte, error)
+	passwordBegin func(context.Context, []byte, uint64, []byte, service.BlobUpload) error
 }
 
 func (s *stubService) RegisterStart(ctx context.Context, username string, p, r []byte) (service.RegisterStartResult, error) {
@@ -261,6 +264,7 @@ func TestErrorMapping(t *testing.T) {
 		{"invalid username", service.ErrInvalidUsername, 400, "invalid_username"},
 		{"invalid request", service.ErrInvalidRequest, 400, "invalid_request"},
 		{"username taken", service.ErrUsernameTaken, 409, "username_taken"},
+		{"conflict", service.ErrConflict, 409, "conflict"},
 		{"internal", service.ErrInternal, 500, "internal"},
 		{"wrapped", fmt.Errorf("context: %w", service.ErrLoginFailed), 401, "unauthorized"},
 		{"unexpected", errors.New("db connection failed, password=hunter2"), 500, "internal"},
@@ -554,6 +558,205 @@ func TestRefusedAuthenticationReturnsNoData(t *testing.T) {
 	rec := serve(New(svc, nil), "GET", wire.PathAccountBlobs, "", signedHeaders([]byte{1}, []byte{2}, 1))
 
 	if rec.Code != http.StatusUnauthorized || rec.Body.String() != `{"error":"unauthorized"}` {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func (s *stubService) PasswordChangeStart(ctx context.Context, userID, request []byte) ([]byte, error) {
+	if s.passwordStart == nil {
+		return nil, errNotSet
+	}
+	return s.passwordStart(ctx, userID, request)
+}
+
+func (s *stubService) PasswordChangeBegin(ctx context.Context, userID []byte, expectedVersion uint64, record []byte, kek service.BlobUpload) error {
+	if s.passwordBegin == nil {
+		return errNotSet
+	}
+	return s.passwordBegin(ctx, userID, expectedVersion, record, kek)
+}
+
+// signedJSON posts a JSON body with signature headers.
+func signedJSON(t *testing.T, h http.Handler, path string, body any, extra map[string]string) (*httptest.ResponseRecorder, string) {
+	t.Helper()
+
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	headers := signedHeaders([]byte{1}, []byte{2}, 1)
+	headers["Content-Type"] = "application/json"
+	for key, value := range extra {
+		headers[key] = value
+	}
+
+	return serve(h, "POST", path, string(encoded), headers), string(encoded)
+}
+
+func authenticatedAs(userID []byte, seen *service.AuthRequest, scope *string) func(context.Context, service.AuthRequest, string) (store.Session, error) {
+	return func(_ context.Context, r service.AuthRequest, s string) (store.Session, error) {
+		if seen != nil {
+			*seen = r
+		}
+		if scope != nil {
+			*scope = s
+		}
+		return store.Session{UserID: userID}, nil
+	}
+}
+
+func TestPasswordRoutesNeedASignature(t *testing.T) {
+	svc := &stubService{
+		passwordStart: func(context.Context, []byte, []byte) ([]byte, error) {
+			t.Error("the service was called")
+			return nil, nil
+		},
+		passwordBegin: func(context.Context, []byte, uint64, []byte, service.BlobUpload) error {
+			t.Error("the service was called")
+			return nil
+		},
+	}
+	h := New(svc, nil)
+
+	for _, path := range []string{wire.PathPasswordStart, wire.PathPasswordBegin} {
+		rec := serve(h, "POST", path, "{}", map[string]string{"Content-Type": "application/json"})
+		if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "unauthorized" {
+			t.Fatalf("%s: status %d, body %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestPasswordStartPassesTheRequest(t *testing.T) {
+	var seen service.AuthRequest
+	var scope string
+	var gotUser, gotRequest []byte
+
+	svc := &stubService{
+		authenticate: authenticatedAs([]byte{7}, &seen, &scope),
+		passwordStart: func(_ context.Context, userID, request []byte) ([]byte, error) {
+			gotUser, gotRequest = userID, request
+			return []byte{5}, nil
+		},
+	}
+
+	rec, sent := signedJSON(t, New(svc, nil), wire.PathPasswordStart, wire.PasswordStartRequest{PasswordRequest: []byte{1, 2}}, nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	var res wire.PasswordStartResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+
+	if scope != "full" || string(seen.Body) != sent || seen.Path != wire.PathPasswordStart || seen.Method != "POST" {
+		t.Fatalf("authenticated as scope %q with %+v", scope, seen)
+	}
+	if !bytes.Equal(gotUser, []byte{7}) || !bytes.Equal(gotRequest, []byte{1, 2}) || !bytes.Equal(res.PasswordResponse, []byte{5}) {
+		t.Fatalf("service saw %x %x, answer %+v", gotUser, gotRequest, res)
+	}
+}
+
+func TestPasswordBeginPassesTheRequest(t *testing.T) {
+	var gotVersion uint64
+	var gotRecord []byte
+	var gotKEK service.BlobUpload
+
+	svc := &stubService{
+		authenticate: authenticatedAs([]byte{7}, nil, nil),
+		passwordBegin: func(_ context.Context, _ []byte, expected uint64, record []byte, kek service.BlobUpload) error {
+			gotVersion, gotRecord, gotKEK = expected, record, kek
+			return nil
+		},
+	}
+
+	rec, _ := signedJSON(t, New(svc, nil), wire.PathPasswordBegin, wire.PasswordBeginRequest{
+		ExpectedVersion: 3,
+		Record:          []byte{1},
+		KEK:             wire.Blob{Kind: 1, Version: 4, PrevHash: make([]byte, 32), Data: []byte("kek")},
+	}, nil)
+
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Fatalf("status %d, body %q", rec.Code, rec.Body.String())
+	}
+	if gotVersion != 3 || !bytes.Equal(gotRecord, []byte{1}) || gotKEK.Version != 4 || gotKEK.Kind != 1 {
+		t.Fatalf("service saw %d %x %+v", gotVersion, gotRecord, gotKEK)
+	}
+}
+
+func TestPasswordBeginRefusesShortHashes(t *testing.T) {
+	svc := &stubService{
+		authenticate: authenticatedAs([]byte{7}, nil, nil),
+		passwordBegin: func(context.Context, []byte, uint64, []byte, service.BlobUpload) error {
+			t.Error("the service was called")
+			return nil
+		},
+	}
+
+	rec, _ := signedJSON(t, New(svc, nil), wire.PathPasswordBegin, wire.PasswordBeginRequest{
+		ExpectedVersion: 1,
+		KEK:             wire.Blob{Kind: 1, Version: 2, PrevHash: []byte{1, 2, 3}},
+	}, nil)
+
+	if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSignedBodiesFollowTheSameRules(t *testing.T) {
+	svc := &stubService{
+		authenticate: authenticatedAs([]byte{7}, nil, nil),
+		passwordStart: func(context.Context, []byte, []byte) ([]byte, error) {
+			t.Error("the service was called")
+			return nil, nil
+		},
+	}
+	h := New(svc, nil)
+
+	headers := signedHeaders([]byte{1}, []byte{2}, 1)
+
+	bodies := map[string]string{
+		"unknown field": `{"password_request":"AQ==","extra":1}`,
+		"two values":    `{"password_request":"AQ=="} {}`,
+		"not json":      `nope`,
+		"empty":         ``,
+		"bad base64":    `{"password_request":"!!!"}`,
+	}
+
+	for name, body := range bodies {
+		all := map[string]string{"Content-Type": "application/json"}
+		for key, value := range headers {
+			all[key] = value
+		}
+
+		rec := serve(h, "POST", wire.PathPasswordStart, body, all)
+		if rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_request" {
+			t.Fatalf("%s: status %d, body %s", name, rec.Code, rec.Body.String())
+		}
+	}
+
+	rec := serve(h, "POST", wire.PathPasswordStart, `{"password_request":"AQ=="}`, headers)
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("without a content type: status %d", rec.Code)
+	}
+}
+
+func TestAChangeThatClashesIsReported(t *testing.T) {
+	svc := &stubService{
+		authenticate: authenticatedAs([]byte{7}, nil, nil),
+		passwordBegin: func(context.Context, []byte, uint64, []byte, service.BlobUpload) error {
+			return service.ErrConflict
+		},
+	}
+
+	rec, _ := signedJSON(t, New(svc, nil), wire.PathPasswordBegin, wire.PasswordBeginRequest{
+		ExpectedVersion: 1,
+		KEK:             wire.Blob{Kind: 1, Version: 2, PrevHash: make([]byte, 32)},
+	}, nil)
+
+	if rec.Code != http.StatusConflict || errorCode(t, rec) != "conflict" {
 		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
 	}
 }

@@ -311,6 +311,13 @@ func (c *Client) Register(
 // ErrLoginFailed, and only after the slow key stretching inside the OPAQUE
 // library has run.
 func (c *Client) Login(ctx context.Context, username, passphrase string) (*Session, error) {
+	return c.login(ctx, username, passphrase, "password", nil)
+}
+
+// login runs a login of the given kind. Kind "pending" proves the new password
+// of a password change that has begun. accept is the KEK head such a change
+// produced, so that it is not reported as a surprise.
+func (c *Client) login(ctx context.Context, username, passphrase, kind string, accept *Head) (*Session, error) {
 	password := []byte(PasswordInput(passphrase))
 	defer wipe(password)
 
@@ -319,7 +326,7 @@ func (c *Client) Login(ctx context.Context, username, passphrase string) (*Sessi
 		return nil, err
 	}
 
-	start, err := c.T.LoginStart(ctx, username, "password", oc.LoginInit(password).Serialize())
+	start, err := c.T.LoginStart(ctx, username, kind, oc.LoginInit(password).Serialize())
 	if err != nil {
 		return nil, err
 	}
@@ -360,6 +367,7 @@ func (c *Client) Login(ctx context.Context, username, passphrase string) (*Sessi
 	}
 
 	session := &Session{
+		Username:   username,
 		UserID:     info.UserID,
 		ID:         info.SessionID,
 		Scope:      info.Scope,
@@ -372,13 +380,14 @@ func (c *Client) Login(ctx context.Context, username, passphrase string) (*Sessi
 		return nil, err
 	}
 
-	account, warnings, err := c.openAccount(info.UserID, exportKey, blobs)
+	account, warnings, kekHead, err := c.openAccount(info.UserID, exportKey, blobs, accept)
 	if err != nil {
 		session.Wipe()
 		return nil, err
 	}
 
 	session.Account = account
+	session.kekVersion, session.kekHash = kekHead.Version, kekHead.Hash
 	session.Warnings = warnings
 
 	return session, nil
@@ -392,17 +401,17 @@ var kindNames = map[zkcrypto.BlobKind]string{
 
 // openAccount checks the three account blobs against the remembered heads,
 // opens them, and only then remembers the new heads.
-func (c *Client) openAccount(userID, exportKey []byte, blobs []service.BlobInfo) (*Account, []string, error) {
+func (c *Client) openAccount(userID, exportKey []byte, blobs []service.BlobInfo, accept *Head) (*Account, []string, Head, error) {
 	wanted := []zkcrypto.BlobKind{zkcrypto.KindKEK, zkcrypto.KindMEK, zkcrypto.KindIdentity}
 
 	byKind := make(map[zkcrypto.BlobKind]service.BlobInfo, len(blobs))
 	for _, b := range blobs {
 		kind := zkcrypto.BlobKind(b.Kind)
 		if _, known := kindNames[kind]; !known {
-			return nil, nil, ErrBadBlobs
+			return nil, nil, Head{}, ErrBadBlobs
 		}
 		if _, repeated := byKind[kind]; repeated {
-			return nil, nil, ErrBadBlobs
+			return nil, nil, Head{}, ErrBadBlobs
 		}
 		byKind[kind] = b
 	}
@@ -415,21 +424,25 @@ func (c *Client) openAccount(userID, exportKey []byte, blobs []service.BlobInfo)
 	for _, kind := range wanted {
 		b, ok := byKind[kind]
 		if !ok {
-			return nil, nil, ErrBadBlobs
+			return nil, nil, Head{}, ErrBadBlobs
 		}
 
 		hash, err := zkcrypto.BlobHash(userID, kind, b.Version, b.PrevHash, b.Data)
 		if err != nil {
-			return nil, nil, ErrBadBlobs
+			return nil, nil, Head{}, ErrBadBlobs
 		}
 
 		known, seen := c.Heads.Get(userID, byte(kind))
 
 		warning, err := checkHead(known, seen, b.Version, b.PrevHash, hash)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, Head{}, err
 		}
-		if warning != "" {
+		// A KEK version that this device's own password change produced is no surprise.
+		expected := kind == zkcrypto.KindKEK && accept != nil &&
+			accept.Version == b.Version && accept.Hash == hash
+
+		if warning != "" && !expected {
 			warnings = append(warnings, kindNames[kind]+": "+warning)
 		}
 
@@ -438,7 +451,7 @@ func (c *Client) openAccount(userID, exportKey []byte, blobs []service.BlobInfo)
 
 	wrapKey, err := zkcrypto.DeriveKey(exportKey, zkcrypto.LabelWrap)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, Head{}, err
 	}
 	defer wipe(wrapKey)
 
@@ -455,34 +468,34 @@ func (c *Client) openAccount(userID, exportKey []byte, blobs []service.BlobInfo)
 
 	kek, err := open(wrapKey, zkcrypto.KindKEK)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, Head{}, err
 	}
 
 	mek, err := open(kek, zkcrypto.KindMEK)
 	if err != nil {
 		wipe(kek)
-		return nil, nil, err
+		return nil, nil, Head{}, err
 	}
 
 	identity, err := open(kek, zkcrypto.KindIdentity)
 	if err != nil {
 		wipe(kek)
 		wipe(mek)
-		return nil, nil, err
+		return nil, nil, Head{}, err
 	}
 	defer wipe(identity)
 
 	if len(kek) != keySize || len(mek) != keySize || len(identity) != identitySize {
 		wipe(kek)
 		wipe(mek)
-		return nil, nil, ErrBlobRejected
+		return nil, nil, Head{}, ErrBlobRejected
 	}
 
 	for kind, head := range heads {
 		if err := c.Heads.Put(userID, byte(kind), head); err != nil {
 			wipe(kek)
 			wipe(mek)
-			return nil, nil, fmt.Errorf("%w: %v", ErrHeadsNotSaved, err)
+			return nil, nil, Head{}, fmt.Errorf("%w: %v", ErrHeadsNotSaved, err)
 		}
 	}
 
@@ -491,5 +504,5 @@ func (c *Client) openAccount(userID, exportKey []byte, blobs []service.BlobInfo)
 		MEK:       mek,
 		MLKEMSeed: bytes.Clone(identity[:64]),
 		SignSeed:  bytes.Clone(identity[64:]),
-	}, warnings, nil
+	}, warnings, heads[zkcrypto.KindKEK], nil
 }

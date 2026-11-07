@@ -28,6 +28,10 @@ var (
 	// ErrUnauthorized indicates that a request is not authorized.
 	ErrUnauthorized = errors.New("unauthorized")
 
+	// ErrConflict indicates that a request clashes with the current state, for
+	// example a password change that starts from an out of date version.
+	ErrConflict = errors.New("conflict")
+
 	// ErrInternal indicates an internal service failure.
 	ErrInternal = errors.New("internal error")
 )

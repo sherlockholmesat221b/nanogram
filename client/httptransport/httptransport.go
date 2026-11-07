@@ -63,8 +63,11 @@ func statusError(status int, body []byte, unauthorized error) error {
 		return unauthorized
 
 	case http.StatusConflict:
-		if e.Error == "username_taken" {
+		switch e.Error {
+		case "username_taken":
 			return service.ErrUsernameTaken
+		case "conflict":
+			return service.ErrConflict
 		}
 
 	case http.StatusBadRequest:
@@ -210,11 +213,7 @@ func (t *Transport) AccountBlobs(ctx context.Context, r service.AuthRequest) ([]
 		return nil, errors.New("invalid request path")
 	}
 
-	headers := map[string]string{
-		wire.HeaderSession: base64.StdEncoding.EncodeToString(r.SessionID),
-		wire.HeaderCounter: strconv.FormatUint(r.Counter, 10),
-		wire.HeaderMAC:     base64.StdEncoding.EncodeToString(r.MAC),
-	}
+	headers := signatureHeaders(r)
 
 	var res wire.BlobsResponse
 	if err := t.do(ctx, r.Method, r.Path, headers, r.Body, http.StatusOK, service.ErrUnauthorized, &res); err != nil {
@@ -232,4 +231,46 @@ func (t *Transport) AccountBlobs(ctx context.Context, r service.AuthRequest) ([]
 	}
 
 	return blobs, nil
+}
+
+func signatureHeaders(r service.AuthRequest) map[string]string {
+	return map[string]string{
+		wire.HeaderSession: base64.StdEncoding.EncodeToString(r.SessionID),
+		wire.HeaderCounter: strconv.FormatUint(r.Counter, 10),
+		wire.HeaderMAC:     base64.StdEncoding.EncodeToString(r.MAC),
+	}
+}
+
+// signedPost sends a signed POST. The body is made first, handed to sign, and
+// sent exactly as it was signed.
+func (t *Transport) signedPost(ctx context.Context, sign client.Signer, path string, in any, wantStatus int, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+
+	r := sign(http.MethodPost, path, body)
+
+	return t.do(ctx, r.Method, r.Path, signatureHeaders(r), r.Body, wantStatus, service.ErrUnauthorized, out)
+}
+
+// PasswordStart implements client.Transport.
+func (t *Transport) PasswordStart(ctx context.Context, sign client.Signer, passwordReq []byte) ([]byte, error) {
+	var res wire.PasswordStartResponse
+
+	err := t.signedPost(ctx, sign, wire.PathPasswordStart, wire.PasswordStartRequest{PasswordRequest: passwordReq}, http.StatusOK, &res)
+	if err != nil {
+		return nil, err
+	}
+
+	return res.PasswordResponse, nil
+}
+
+// PasswordBegin implements client.Transport.
+func (t *Transport) PasswordBegin(ctx context.Context, sign client.Signer, expectedVersion uint64, record []byte, kek service.BlobUpload) error {
+	return t.signedPost(ctx, sign, wire.PathPasswordBegin, wire.PasswordBeginRequest{
+		ExpectedVersion: expectedVersion,
+		Record:          record,
+		KEK:             wire.BlobFromUpload(kek),
+	}, http.StatusNoContent, nil)
 }

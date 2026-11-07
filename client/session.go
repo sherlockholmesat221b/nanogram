@@ -19,6 +19,7 @@ type Account struct {
 
 // Session is a logged in session. Sign makes the signed request headers.
 type Session struct {
+	Username string
 	UserID   []byte
 	ID       []byte
 	Scope    string
@@ -28,6 +29,10 @@ type Session struct {
 	mu         sync.Mutex
 	requestKey []byte
 	counter    uint64
+
+	// The newest KEK blob this session saw, which a password change builds on.
+	kekVersion uint64
+	kekHash    [32]byte
 }
 
 // Sign returns the authenticated request for one call. The counter goes up on

@@ -49,6 +49,24 @@ func (d direct) AccountBlobs(ctx context.Context, r service.AuthRequest) ([]serv
 	return d.svc.CurrentBlobs(ctx, session.UserID, store.BlobKindKEK, store.BlobKindMEK, store.BlobKindIdentity)
 }
 
+func (d direct) PasswordStart(ctx context.Context, sign Signer, passwordReq []byte) ([]byte, error) {
+	session, err := d.svc.Authenticate(ctx, sign("POST", wire.PathPasswordStart, nil), "full")
+	if err != nil {
+		return nil, err
+	}
+
+	return d.svc.PasswordChangeStart(ctx, session.UserID, passwordReq)
+}
+
+func (d direct) PasswordBegin(ctx context.Context, sign Signer, expectedVersion uint64, record []byte, kek service.BlobUpload) error {
+	session, err := d.svc.Authenticate(ctx, sign("POST", wire.PathPasswordBegin, nil), "full")
+	if err != nil {
+		return err
+	}
+
+	return d.svc.PasswordChangeBegin(ctx, session.UserID, expectedVersion, record, kek)
+}
+
 // counting counts how often the server was contacted for a registration.
 type counting struct {
 	Transport
@@ -514,5 +532,109 @@ func TestCustomPasswordIsUsedExactly(t *testing.T) {
 	// Case matters for anything that is not a plain list of words.
 	if _, err := r.client.Login(context.Background(), "alice", strings.ToLower(password)); !errors.Is(err, ErrLoginFailed) {
 		t.Fatalf("another case: error = %v, want ErrLoginFailed", err)
+	}
+}
+
+const changedPassword = "Xq7#mP2$vL9@wR4!tN8z"
+
+func TestChangePassword(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+
+	oldPassphrase, result := r.register(t, false)
+	old := r.login(t, oldPassphrase)
+
+	oldKEK, oldMEK := bytes.Clone(old.Account.KEK), bytes.Clone(old.Account.MEK)
+	stale := old.Sign("GET", wire.PathAccountBlobs, nil)
+
+	fresh, err := r.client.ChangePassword(ctx, old, changedPassword, changedPassword)
+	if err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+
+	// The old password is gone, the new one works.
+	if _, err := r.client.Login(ctx, "alice", oldPassphrase); !errors.Is(err, ErrLoginFailed) {
+		t.Fatalf("old password: error = %v, want ErrLoginFailed", err)
+	}
+	again := r.login(t, changedPassword)
+
+	// Only the key blob was re-wrapped: the account keys are the same.
+	for _, s := range []*Session{fresh, again} {
+		if !bytes.Equal(s.Account.KEK, oldKEK) || !bytes.Equal(s.Account.MEK, oldMEK) {
+			t.Fatal("the account keys changed")
+		}
+		if len(s.Warnings) != 0 {
+			t.Fatalf("warnings after this device's own change: %v", s.Warnings)
+		}
+	}
+
+	head, _ := r.heads.Get(result.UserID, byte(zkcrypto.KindKEK))
+	if head.Version != 2 {
+		t.Fatalf("remembered KEK version = %d, want 2", head.Version)
+	}
+
+	// Every older session ended, the new one works.
+	d := direct{r.svc}
+
+	if _, err := d.AccountBlobs(ctx, stale); !errors.Is(err, service.ErrUnauthorized) {
+		t.Fatalf("old session: error = %v, want ErrUnauthorized", err)
+	}
+	if blobs, err := d.AccountBlobs(ctx, fresh.Sign("GET", wire.PathAccountBlobs, nil)); err != nil || len(blobs) != 3 {
+		t.Fatalf("new session: %d blobs, %v", len(blobs), err)
+	}
+
+	// The old session object is wiped.
+	if old.requestKey != nil {
+		t.Fatal("the old session was not wiped")
+	}
+}
+
+func TestChangePasswordRefusesWeakAndMismatchedPasswords(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+
+	passphrase, _ := r.register(t, false)
+	session := r.login(t, passphrase)
+
+	if _, err := r.client.ChangePassword(ctx, session, "password", "password"); !errors.Is(err, ErrWeakPassphrase) {
+		t.Fatalf("weak: error = %v", err)
+	}
+	if _, err := r.client.ChangePassword(ctx, session, changedPassword, changedPassword+"x"); !errors.Is(err, ErrPassphraseMismatch) {
+		t.Fatalf("mismatch: error = %v", err)
+	}
+	if _, err := r.client.ChangePassword(ctx, nil, changedPassword, changedPassword); err == nil {
+		t.Fatal("a missing session was accepted")
+	}
+
+	// Nothing was sent, so the session and the old password still work.
+	if _, err := (direct{r.svc}).AccountBlobs(ctx, session.Sign("GET", wire.PathAccountBlobs, nil)); err != nil {
+		t.Fatalf("the session stopped working: %v", err)
+	}
+	r.login(t, passphrase)
+}
+
+func TestAnotherDeviceSeesAChainedChangeAsAWarning(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+
+	passphrase, _ := r.register(t, false)
+
+	// A second device that logs in before the change.
+	other := New(direct{r.svc}, NewMemHeads())
+	if _, err := other.Login(ctx, "alice", passphrase); err != nil {
+		t.Fatal(err)
+	}
+
+	session := r.login(t, passphrase)
+	if _, err := r.client.ChangePassword(ctx, session, changedPassword, changedPassword); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := other.Login(ctx, "alice", changedPassword)
+	if err != nil {
+		t.Fatalf("the second device cannot log in after the change: %v", err)
+	}
+	if len(again.Warnings) != 1 || !strings.Contains(again.Warnings[0], "kek") {
+		t.Fatalf("warnings: %v", again.Warnings)
 	}
 }
