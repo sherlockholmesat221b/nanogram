@@ -10,6 +10,7 @@ import (
 
 	"gitlab.com/sherlockholmesat221b/nanogram/client"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/auth"
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 )
 
@@ -30,7 +31,25 @@ func TestClientAndServerAgreeOnUsernames(t *testing.T) {
 	}
 
 	for _, name := range names {
-		_, err := s.transport.RegisterStart(context.Background(), name, request, nil)
+		var solution *pow.Solution
+		if client.ValidUsername(name) {
+			challenge, err := s.transport.PowChallenge(context.Background(), "register", name)
+			if err != nil {
+				t.Fatalf("%q: PowChallenge: %v", name, err)
+			}
+			counter, err := pow.Solve(challenge, 1<<20)
+			if err != nil {
+				t.Fatalf("%q: pow.Solve: %v", name, err)
+			}
+			solution = &pow.Solution{
+				Nonce:           challenge.Nonce,
+				Difficulty:      challenge.Difficulty,
+				IssuedAt:        challenge.IssuedAt,
+				MAC:             challenge.MAC,
+				SolutionCounter: counter,
+			}
+		}
+		_, err := s.transport.RegisterStart(context.Background(), name, request, nil, solution)
 
 		// A name that is already taken has a valid format.
 		serverAccepts := !errors.Is(err, service.ErrInvalidUsername)

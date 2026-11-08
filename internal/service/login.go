@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/auth"
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/zkcrypto"
 )
@@ -32,18 +33,26 @@ func (s *Service) LoginStart(
 	ctx context.Context,
 	username, kind string,
 	ke1 []byte,
+	solution *pow.Solution,
 ) (LoginStartResult, error) {
 	var result LoginStartResult
 
 	if kind != "password" && kind != "recovery" && kind != "pending" {
 		return result, ErrInvalidRequest
 	}
-
 	if !usernamePattern.MatchString(username) {
 		return result, ErrInvalidRequest
 	}
-
 	username = canonicalUsername(username)
+
+	now := s.now()
+	if !s.anonBucket.Allow(nil, now) || !s.userBucket.Allow(s.hashedUsername(username), now) {
+		return result, ErrBusy
+	}
+	if err := s.verifyPow("login", username, solution); err != nil {
+		return result, err
+	}
+	s.recordAttempt(username)
 
 	user, userErr := s.store.UserByUsername(ctx, username)
 
@@ -110,7 +119,7 @@ func (s *Service) LoginStart(
 		return result, ErrInternal
 	}
 
-	now := s.now()
+	now = s.now()
 	idHash := sha256.Sum256(loginID)
 
 	if err := s.store.PutLoginState(ctx, store.LoginState{
@@ -208,10 +217,24 @@ func (s *Service) LoginFinish(
 		return result, ErrInternal
 	}
 
+	count, first, last := s.attempts.Span(s.hashedUsername(user.Username), now)
+	if count > 0 {
+		count-- // exclude the login/start that this login/finish completes
+	}
+
+	// Clear only after every other step succeeded. A failed PutSession
+	// leaves the counter intact, so the user is told the same count on retry.
+	s.attempts.Clear(s.hashedUsername(user.Username))
+
 	return SessionInfo{
 		SessionID: sessionID,
 		UserID:    user.ID,
 		Scope:     scope,
+		RecentFailures: RecentFailures{
+			Count: count,
+			First: first,
+			Last:  last,
+		},
 	}, nil
 }
 

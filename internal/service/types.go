@@ -12,10 +12,11 @@ import (
 
 // Config configures a Service.
 type Config struct {
-	Auth  *auth.Server
-	Store store.Store
-	Now   func() time.Time
-	Rand  io.Reader
+	Auth      *auth.Server
+	Store     store.Store
+	Now       func() time.Time
+	Rand      io.Reader
+	PowSecret []byte // required; used for PoW MACs and username hashing
 }
 
 // RegisterStartResult contains the server's registration responses.
@@ -66,9 +67,10 @@ type LoginStartResult struct {
 
 // SessionInfo describes an authenticated session.
 type SessionInfo struct {
-	SessionID []byte
-	UserID    []byte
-	Scope     string
+	SessionID      []byte
+	UserID         []byte
+	Scope          string
+	RecentFailures RecentFailures
 }
 
 // AuthRequest contains the data authenticated by a request MAC.
@@ -93,4 +95,12 @@ type BlobHeader struct {
 type RecoveryViewResult struct {
 	Recovery  BlobInfo
 	KEKHeader BlobHeader
+}
+
+// RecentFailures is the attempt summary shown to the user after a successful
+// login. First and Last are zero when Count is zero.
+type RecentFailures struct {
+	Count int
+	First time.Time
+	Last  time.Time
 }

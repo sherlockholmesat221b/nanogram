@@ -21,6 +21,7 @@ import (
 	"gitlab.com/sherlockholmesat221b/nanogram/client/httptransport"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/api"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/auth"
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store/memstore"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/wire"
@@ -207,7 +208,23 @@ func TestRecoverySessionCannotReadAccountBlobsOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	start, err := s.transport.LoginStart(ctx, "alice", "recovery", oc.LoginInit(key).Serialize())
+	challenge, err := s.transport.PowChallenge(ctx, "login", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter, err := pow.Solve(challenge, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	solution := &pow.Solution{
+		Nonce:           challenge.Nonce,
+		Difficulty:      challenge.Difficulty,
+		IssuedAt:        challenge.IssuedAt,
+		MAC:             challenge.MAC,
+		SolutionCounter: counter,
+	}
+
+	start, err := s.transport.LoginStart(ctx, "alice", "recovery", oc.LoginInit(key).Serialize(), solution)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +279,22 @@ func TestLoginStartLooksTheSameForKnownAndUnknownUsers(t *testing.T) {
 	ke1 := oc.LoginInit([]byte("some password")).Serialize()
 
 	post := func(username string) (int, []byte, http.Header) {
-		body, err := json.Marshal(wire.LoginStartRequest{Username: username, Kind: "password", KE1: ke1})
+		challenge, err := s.transport.PowChallenge(ctx, "login", username)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counter, err := pow.Solve(challenge, 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		solution := &wire.PowSolution{
+			Nonce:           challenge.Nonce,
+			Difficulty:      challenge.Difficulty,
+			IssuedAt:        challenge.IssuedAt,
+			MAC:             challenge.MAC,
+			SolutionCounter: counter,
+		}
+		body, err := json.Marshal(wire.LoginStartRequest{Username: username, Kind: "password", KE1: ke1, Pow: solution})
 		if err != nil {
 			t.Fatal(err)
 		}

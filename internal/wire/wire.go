@@ -33,9 +33,10 @@ const (
 // RegisterStartRequest begins a registration. RecoveryRequest is empty when
 // the user skips recovery.
 type RegisterStartRequest struct {
-	Username        string `json:"username"`
-	PasswordRequest []byte `json:"password_request"`
-	RecoveryRequest []byte `json:"recovery_request,omitempty"`
+	Username        string       `json:"username"`
+	PasswordRequest []byte       `json:"password_request"`
+	RecoveryRequest []byte       `json:"recovery_request,omitempty"`
+	Pow             *PowSolution `json:"pow,omitempty"`
 }
 
 // RegisterStartResponse carries the server's OPAQUE answers and the user id.
@@ -71,9 +72,10 @@ type RegisterFinishRequest struct {
 
 // LoginStartRequest begins a login. Kind is "password" or "recovery".
 type LoginStartRequest struct {
-	Username string `json:"username"`
-	Kind     string `json:"kind"`
-	KE1      []byte `json:"ke1"`
+	Username string       `json:"username"`
+	Kind     string       `json:"kind"`
+	KE1      []byte       `json:"ke1"`
+	Pow      *PowSolution `json:"pow,omitempty"`
 }
 
 // LoginStartResponse carries the login id, the user id and the OPAQUE reply.
@@ -91,9 +93,10 @@ type LoginFinishRequest struct {
 
 // LoginFinishResponse describes the new session.
 type LoginFinishResponse struct {
-	SessionID []byte `json:"session_id"`
-	UserID    []byte `json:"user_id"`
-	Scope     string `json:"scope"`
+	SessionID      []byte         `json:"session_id"`
+	UserID         []byte         `json:"user_id"`
+	Scope          string         `json:"scope"`
+	RecentFailures RecentFailures `json:"recent_failures"`
 }
 
 // BlobsResponse lists blobs.
@@ -199,4 +202,11 @@ func RegisterFinishFromService(r service.RegisterFinishRequest) RegisterFinishRe
 	}
 
 	return out
+}
+
+// RecentFailures is the attempt summary returned on login.
+type RecentFailures struct {
+	Count int   `json:"count"`
+	First int64 `json:"first"`
+	Last  int64 `json:"last"`
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/bytemare/opaque"
 
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/auth"
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store/memstore"
 )
@@ -52,6 +53,25 @@ func newRegistrationFixture(t *testing.T) *registrationFixture {
 	})
 
 	return f
+}
+
+func (f *registrationFixture) solution(t *testing.T, purpose, username string) *pow.Solution {
+	t.Helper()
+	c, err := f.service.PowChallenge(context.Background(), purpose, username)
+	if err != nil {
+		return nil
+	}
+	counter, err := pow.Solve(c, 1<<20)
+	if err != nil {
+		t.Fatalf("pow.Solve: %v", err)
+	}
+	return &pow.Solution{
+		Nonce:           c.Nonce,
+		Difficulty:      c.Difficulty,
+		IssuedAt:        c.IssuedAt,
+		MAC:             c.MAC,
+		SolutionCounter: counter,
+	}
 }
 
 func (f *registrationFixture) client(t *testing.T) *opaque.Client {
@@ -145,6 +165,7 @@ func (f *registrationFixture) validFinishRequest(
 		username,
 		passwordRequest.Serialize(),
 		recoveryRequest,
+		f.solution(t, "register", username),
 	)
 	if err != nil {
 		t.Fatalf("RegisterStart: %v", err)
@@ -200,6 +221,7 @@ func TestRegisterStartRejectsInvalidUsername(t *testing.T) {
 				username,
 				[]byte("request"),
 				nil,
+				f.solution(t, "register", username),
 			)
 
 			if !errors.Is(err, ErrInvalidUsername) {
@@ -220,6 +242,7 @@ func TestRegisterStartRejectsTakenUsername(t *testing.T) {
 
 	_, err := f.service.RegisterStart(
 		context.Background(), testUsername, request, nil,
+		f.solution(t, "register", testUsername),
 	)
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("RegisterStart error = %v, want ErrUsernameTaken", err)
@@ -231,6 +254,7 @@ func TestRegisterStartMalformedRequestDoesNotReserveName(t *testing.T) {
 
 	_, err := f.service.RegisterStart(
 		context.Background(), testUsername, []byte("malformed request"), nil,
+		f.solution(t, "register", testUsername),
 	)
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("malformed request: error = %v, want ErrInvalidRequest", err)
@@ -241,6 +265,7 @@ func TestRegisterStartMalformedRequestDoesNotReserveName(t *testing.T) {
 
 	if _, err := f.service.RegisterStart(
 		context.Background(), testUsername, request, nil,
+		f.solution(t, "register", testUsername),
 	); err != nil {
 		t.Fatalf("a malformed request locked the name: %v", err)
 	}
@@ -254,6 +279,7 @@ func TestRegisterStartRejectsMalformedRequest(t *testing.T) {
 		testUsername,
 		[]byte("malformed request"),
 		nil,
+		f.solution(t, "register", testUsername),
 	)
 
 	if !errors.Is(err, ErrInvalidRequest) {

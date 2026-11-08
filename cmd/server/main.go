@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -37,11 +38,16 @@ func build(keysPath string, logger *log.Logger) (*memstore.MemStore, http.Handle
 		return nil, nil, err
 	}
 
+	powSecret := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, powSecret); err != nil {
+		return nil, nil, err
+	}
 	st := memstore.New()
 
 	svc := service.New(service.Config{
-		Auth:  auth.NewServer(keys),
-		Store: st,
+		Auth:      auth.NewServer(keys),
+		Store:     st,
+		PowSecret: powSecret,
 	})
 
 	return st, api.New(svc, logger), nil

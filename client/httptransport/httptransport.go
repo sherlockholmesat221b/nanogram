@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"gitlab.com/sherlockholmesat221b/nanogram/client"
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/wire"
 )
@@ -78,6 +79,12 @@ func statusError(status int, body []byte, unauthorized error) error {
 
 	case http.StatusRequestEntityTooLarge, http.StatusUnsupportedMediaType:
 		return service.ErrInvalidRequest
+
+	case http.StatusPreconditionRequired:
+		return service.ErrPowInvalid
+
+	case http.StatusTooManyRequests:
+		return service.ErrBusy
 	}
 
 	return fmt.Errorf("the server answered with status %d", status)
@@ -148,18 +155,16 @@ func (t *Transport) post(ctx context.Context, path string, in any, wantStatus in
 }
 
 // RegisterStart implements client.Transport.
-func (t *Transport) RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte) (service.RegisterStartResult, error) {
+func (t *Transport) RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte, solution *pow.Solution) (service.RegisterStartResult, error) {
 	var res wire.RegisterStartResponse
-
-	err := t.post(ctx, wire.PathRegisterStart, wire.RegisterStartRequest{
-		Username:        username,
-		PasswordRequest: passwordReq,
-		RecoveryRequest: recoveryReq,
-	}, http.StatusOK, service.ErrUnauthorized, &res)
-	if err != nil {
+	req := wire.RegisterStartRequest{Username: username, PasswordRequest: passwordReq, RecoveryRequest: recoveryReq}
+	if solution != nil {
+		w := wire.SolutionToWire(*solution)
+		req.Pow = &w
+	}
+	if err := t.post(ctx, wire.PathRegisterStart, req, http.StatusOK, service.ErrUnauthorized, &res); err != nil {
 		return service.RegisterStartResult{}, err
 	}
-
 	return service.RegisterStartResult{
 		UserID:           res.UserID,
 		PasswordResponse: res.PasswordResponse,
@@ -176,18 +181,16 @@ func (t *Transport) RegisterFinish(ctx context.Context, r service.RegisterFinish
 }
 
 // LoginStart implements client.Transport.
-func (t *Transport) LoginStart(ctx context.Context, username, kind string, ke1 []byte) (service.LoginStartResult, error) {
+func (t *Transport) LoginStart(ctx context.Context, username, kind string, ke1 []byte, solution *pow.Solution) (service.LoginStartResult, error) {
 	var res wire.LoginStartResponse
-
-	err := t.post(ctx, wire.PathLoginStart, wire.LoginStartRequest{
-		Username: username,
-		Kind:     kind,
-		KE1:      ke1,
-	}, http.StatusOK, service.ErrLoginFailed, &res)
-	if err != nil {
+	req := wire.LoginStartRequest{Username: username, Kind: kind, KE1: ke1}
+	if solution != nil {
+		w := wire.SolutionToWire(*solution)
+		req.Pow = &w
+	}
+	if err := t.post(ctx, wire.PathLoginStart, req, http.StatusOK, service.ErrLoginFailed, &res); err != nil {
 		return service.LoginStartResult{}, err
 	}
-
 	return service.LoginStartResult{LoginID: res.LoginID, UserID: res.UserID, KE2: res.KE2}, nil
 }
 
@@ -203,7 +206,16 @@ func (t *Transport) LoginFinish(ctx context.Context, loginID, ke3 []byte) (servi
 		return service.SessionInfo{}, err
 	}
 
-	return service.SessionInfo{SessionID: res.SessionID, UserID: res.UserID, Scope: res.Scope}, nil
+	return service.SessionInfo{
+		SessionID: res.SessionID,
+		UserID:    res.UserID,
+		Scope:     res.Scope,
+		RecentFailures: service.RecentFailures{
+			Count: res.RecentFailures.Count,
+			First: time.Unix(res.RecentFailures.First, 0),
+			Last:  time.Unix(res.RecentFailures.Last, 0),
+		},
+	}, nil
 }
 
 // AccountBlobs implements client.Transport. The request is sent with exactly
@@ -338,4 +350,12 @@ func (t *Transport) RecoveryRotateBegin(ctx context.Context, sign client.Signer,
 
 func (t *Transport) RecoveryDisable(ctx context.Context, sign client.Signer) error {
 	return t.signedPost(ctx, sign, wire.PathRecoveryDisable, struct{}{}, http.StatusNoContent, nil)
+}
+
+func (t *Transport) PowChallenge(ctx context.Context, purpose, username string) (pow.Challenge, error) {
+	var res wire.PowChallengeResponse
+	if err := t.post(ctx, wire.PathPowChallenge, wire.PowChallengeRequest{Purpose: purpose, Username: username}, http.StatusOK, service.ErrUnauthorized, &res); err != nil {
+		return pow.Challenge{}, err
+	}
+	return wire.ChallengeFromWire(res), nil
 }

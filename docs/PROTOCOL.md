@@ -396,3 +396,327 @@ part 2.
   out-of-date version gives ErrConflict. Nothing else in the store changes.
 - DeleteRecovery is used unchanged.
 - The pending mechanism from part 5 is reused as-is.
+
+## Part 7: abuse protection
+
+This part covers mechanisms that bound the cost of abusive volume against
+the two unauthenticated endpoints (`POST /v1/register/start` and
+`POST /v1/login/start`). It exists because on an onion service the server
+cannot see a client's address, and any mechanism that pretends otherwise
+is a lie in the source.
+
+### What this part promises
+
+- A legitimate user can almost always register and log in.
+- A spammer who finds one name cannot hold it for long.
+- A hostile or compromised server cannot force a client to burn more than
+  2 × 2^cap Blake2b hashes per login or registration attempt, where cap is
+  the client's locally chosen maximum difficulty. The client refuses a
+  solve above its cap, and it refuses to retry after a second
+  `pow_invalid` for the same operation.
+- Server-side enforcement of the proof of work is authoritative and cannot
+  be bypassed by a modified client. The client-side cap protects the user
+  from a hostile server, not the server from a hostile client.
+- A passive observer of the wire learns nothing new from these mechanisms.
+
+### What this part does not promise
+
+- Availability. A funded attacker who can generate sufficient volume can
+  still degrade service. This is already true of the threat model
+  (docs/THREAT_MODEL.md, "What we don't promise") and is restated here so
+  that a reader of this part does not infer a guarantee.
+- Identification. None of these mechanisms identifies a user, and none
+  may be extended to do so without changing the threat model.
+
+### What a modified client can and cannot do
+
+The server independently verifies every proof-of-work solution against its
+own state: the MAC recomputes, the difficulty matches the server's current
+`f(n)`, the hash has the required trailing zero bits, the nonce is not in
+the replay cache. The client's local cap has no bearing on what the server
+accepts.
+
+A modified client can therefore:
+
+- refuse to solve a challenge it dislikes, and thereby deny its own user
+  access;
+- send an insufficient solution, which the server rejects with
+  `pow_invalid`;
+- return different values to its user than it received, which is the
+  broader "live malware" scenario the threat model already classifies as
+  limited defence only.
+
+A modified client cannot:
+
+- make the server accept a solution below the difficulty the server
+  requires;
+- make the server accept a reused nonce;
+- make the server skip the verification altogether.
+
+The abuse mechanism's scope is that a standard client cannot bypass it.
+A modified client is a modified client; it is the modified client's user
+who pays. This is a general property, not specific to proof of work.
+
+### Tor introduction proof of work (operational, not protocol)
+
+The server operator MUST enable Tor's onion-service proof of work
+(`HiddenServicePoWDefensesEnabled 1` in `torrc`, with
+`HiddenServicePoWQueueRate` and `HiddenServicePoWQueueBurst` sized to the
+server's capacity). This is an operational setting, not part of the
+protocol, and its correctness is not something the protocol verifies. It
+raises the cost of reaching the service during periods of overload. It
+does not bound what a reachable client can ask the service to do; that is
+what the rest of this part is for.
+
+### Mechanisms
+
+#### 1. Token buckets, keyed on identities, never addresses
+
+The server maintains token buckets that limit request rate. Every request
+is checked against one or more of these buckets, and refused with 429 and
+`busy` if any of them is empty:
+
+- `anon_new:global` — every unauthenticated request (`register/start`,
+  `login/start`, `pow/challenge`). This is what catches an attacker who
+  rotates usernames: each fresh name has a fresh `user:` bucket, but
+  `anon_new:global` does not care which name is being tried.
+- `user:<HMAC(server_secret, canonical username)>` — every request that
+  names a username. Refused when the named bucket is empty. This catches
+  an attacker who concentrates on one name.
+- `session:<sha256(session_id)>` — every signed request. Signed requests
+  are not checked against `anon_new:global`.
+
+The server MUST NOT use `RemoteAddr`, `X-Forwarded-For`, or any other
+network-level identifier as a bucket key. Reason: on an onion service
+every request arrives from the Tor daemon on loopback; the key would be
+identical for all clients.
+
+The server MUST hash usernames before using them as bucket keys. Reason:
+the bucket state would otherwise be a plaintext list of probed names,
+which is metadata the server does not otherwise collect.
+
+Bucket sizes are operational and not part of the wire. Starting points,
+reviewable as the operator learns the load: `anon_new:global` at 10
+requests per minute per source process, `user:*` at 5 per minute per
+name, `session:*` at 60 per minute per session. A legitimate onboarding
+costs at most 2 requests to `register/start` and one to `login/start`.
+
+#### 2. Per-username caps on outstanding state
+
+The server bounds, per hashed username:
+
+- outstanding login states at 3 (30-second lifetime each, already in
+  part 2);
+- outstanding username reservations at 1 (5-minute lifetime, already in
+  part 1).
+
+A request that would exceed either cap is refused with 429 and the error
+code `busy`. This is different from a per-request rate limit because it
+costs the attacker a slot for the whole lifetime of the state, not just
+one request.
+
+#### 3. Stateless proof of work on `register/start` and `login/start`
+
+Both unauthenticated endpoints require a proof-of-work solution, bound to
+the request. The scheme:
+
+- **Challenge.** The server issues `{nonce, difficulty, issued_at, mac}`
+  via `POST /v1/pow/challenge`, body
+  `{"purpose": "register"|"login", "username": "..."}`. `nonce` is 16
+  random bytes; `issued_at` is Unix seconds; `difficulty` is a number of
+  trailing zero bits; `mac` is
+  `HMAC-SHA-256(pow_secret, "zkc/v1/pow" | nonce | difficulty | issued_at | purpose | username)`.
+  A new `pow_secret` is generated at server start; challenges do not
+  survive a restart.
+- The first-contact challenge fetch is unauthenticated: a man-in-the-middle
+can serve a challenge at any difficulty. The client's local cap is the
+defence. The client pays one bounded solve (at most 2^cap hashes), the
+server rejects the resulting solution because it does not match a
+challenge the server issued, and the client sees `pow_invalid`. This is
+an accepted cost of one bounded solve per MITM attempt; it does not
+compromise any secret, because the password does not leave the client
+until OPAQUE `LoginFinish`, and the OPAQUE exchange is bound to the
+server's long-term public key (part 2, "Server key pinning").
+
+- **Solution.** The client searches `solution_counter` (uint64) until
+  `Blake2b-256("zkc/v1/pow-solve" | nonce | difficulty | solution_counter)`
+  has `difficulty` trailing zero bits, then includes
+  `{"nonce", "issued_at", "solution_counter"}` in the original request
+  (as `register/start`'s or `login/start`'s `pow` field).
+
+- **Verification.** The server MUST accept the solution only if all of:
+  - the recomputed MAC equals the received one (the challenge is one the
+    server issued, with the difficulty, issued_at, purpose and username
+    it chose);
+  - `issued_at` is within 60 seconds of the server clock;
+  - `difficulty >= f(current_failure_count(username))`, where `f` is
+    defined in mechanism 4 below and `current_failure_count` is the
+    server's count at verify time;
+  - the solution is valid for `(nonce, difficulty, solution_counter)`;
+  - `nonce` is not in the replay cache.
+
+- **Replay cache.** A bounded LRU of `(nonce)` values, sized to
+  `max_solve_rate * 60s * safety_margin`. Starting point: 20,000 entries.
+  On accept, the nonce is inserted. On eviction, the oldest is dropped;
+  a nonce evicted after its 60-second window is already unusable because
+  the window check rejects it. The replay window is therefore bounded by
+  the cache size and the 60-second validity, not by unbounded storage.
+  This is the honest bound: replay within the window is possible if the
+  attacker can exceed the cache, which requires solving at the current
+  difficulty for each entry, which is exactly the cost the PoW is meant
+  to impose.
+
+- **Difficulty function.** `f(n) = min(base + n, server_cap)` where
+  `base = 15`, `step = 1`, `server_cap = 20` (in bits). `n` is the number
+  of failed login attempts for this username in the last 15 minutes
+  (mechanism 4). For `register/start`, `n = 0`.
+
+- **Client-side cap.** The client MUST refuse to solve a challenge whose
+  `difficulty` exceeds its local maximum, `max_client_cap = 22` (about
+  four seconds of Blake2b on a slow phone). Refusal is a local error,
+  never a wait. Reason: a hostile server cannot force a client to burn
+  CPU by sending an arbitrarily large difficulty. The two-bit headroom
+  between `server_cap` and `max_client_cap` is deliberate: it allows the
+  server to raise `server_cap` under sustained load without breaking
+  honest clients, while still bounding what a hostile server can make an
+  honest client do to four seconds of CPU per solve.
+
+- **Error shape.** A missing, stale, or wrong PoW gives 428 Precondition
+  Required with `{"error":"pow_invalid"}`. This MUST be the same shape
+  whether the failure was a missing solution, a stale `issued_at`, an
+  insufficient `difficulty`, an already-used `nonce`, or a bad MAC.
+  Reason: an attacker inspecting the source knows all the failure modes;
+  the response must not tell them which they hit.
+
+#### 4. Escalating login difficulty, no lockout
+
+The server keeps, per hashed username, a bounded sliding window of the
+last 32 `login/start` timestamps within the last 15 minutes, regardless
+of whether the client went on to send `login/finish`. This count drives
+mechanism 3's difficulty for the next `login/start` on that name.
+
+Counting `login/start` and not `login/finish` matters: an attacker with
+an OPAQUE client fails on the client side (wrong password = OPAQUE
+client `LoginFinish` fails) and never sends `login/finish`, so counting
+`login/finish` failures would miss the main brute-force pattern and
+let an attacker iterate passwords at the base difficulty forever.
+
+On a successful `login/finish`, the count is cleared after the response
+is built (so `recent_failures` reflects what the user is being told
+about, not the post-clear zero).
+
+The server MUST NOT refuse a login because of past failed attempts, with
+any error code, at any point, for any length of time. Reason: a strong
+password makes online guessing hopeless and a refusal lets any attacker
+who knows a username lock out its owner.
+
+The `login/finish` response MUST include `recent_failures`:
+`{"count": <int>, "first": <unix seconds>, "last": <unix seconds>}`. The
+client MUST show this to the user after a successful login. Reason: this
+is how a user learns their name has been targeted; it does not require
+the server to hold contact details or send a message outside the
+connection.
+
+The count in `recent_failures` reflects the attempts recorded for this
+username since the previous successful `login/finish`, *before* the
+current attempt's success clears it. The clear happens after the
+response body is built, not before.
+
+The server MUST NOT attempt to notify a user of failed attempts through
+email, SMS, push notifications, or any other channel. Reason: the server
+is untrusted, the client's device is the only channel it controls, and
+adding a contact channel is a metadata store with no security benefit.
+
+### Wire changes
+
+| Endpoint | Method | Body | Answer |
+|---|---|---|---|
+| POST /v1/pow/challenge | POST | purpose, username | nonce, difficulty, issued_at, mac |
+| POST /v1/register/start | POST | username, password_request, recovery_request (optional), pow | (unchanged) |
+| POST /v1/login/start | POST | username, kind, ke1, pow | (unchanged) |
+| POST /v1/login/finish | POST | login_id, ke3 | session_id, user_id, scope, recent_failures |
+
+`pow` is `{"nonce": base64, "difficulty": uint8, "issued_at": int64,
+"mac": base64, "solution_counter": uint64}`.
+
+`recent_failures` is `{"count": int, "first": int64, "last": int64}`, all
+zero when there are none.
+
+New error codes: `pow_invalid` (428), `busy` (429).
+
+`POST /v1/pow/challenge` is unauthenticated and is charged to the global
+bucket only. The per-username bucket is charged by `register/start` and
+`login/start`, once per request: a legitimate login costs one user token,
+not two, so "five per minute per name" means five logins per minute, not
+two and a half. A client that spams challenge requests drains its own
+`anon_new:global` allowance without starving its own user bucket.
+
+Signed routes do not require PoW. Their rate limit is mechanism 1's
+session bucket; their identity is the session MAC.
+
+### Failure cases
+
+- If the client receives `pow_invalid`, it MUST fetch a fresh challenge
+  and retry exactly once. A second `pow_invalid` in a row is a protocol
+  error and MUST NOT be retried. This is what bounds the per-operation
+  cost to 2 × 2^cap hashes (see "What this part promises"); a client
+  that retries more than once violates the bound.
+- If the client receives `busy`, it MUST NOT retry automatically. The
+  user is told and chooses to try later.
+- If the client receives a `difficulty` above its cap, it MUST refuse.
+  The user is told. The server cannot be trusted to accept that choice
+  anyway.
+- If the server restarts, all challenges in flight are invalid (the
+  secret is regenerated) and clients see `pow_invalid`; they fetch a
+  fresh challenge and retry.
+- The server MUST NOT clear the attempt count for a username except on
+  a successful `login/finish` for that username, or after expiry of the
+  entries in the sliding window.
+
+### What an attacker who has read this can do
+
+- They can drain the `anon_new:global` bucket and reduce onboarding rate
+  for others. This is a known griefing trade-off; the PoW absorbs the
+  excess at a cost to the attacker, and the bucket recovers within a
+  minute.
+- They can pollute a specific user's failed-attempt count by attempting
+  failed logins, raising that user's PoW difficulty. The user is never
+  refused; the user pays a bounded extra cost (at most `2^cap` hashes,
+  about a second) until they succeed, and then it clears.
+- They can precompute challenges for one username and try guesses in
+  bulk, but each guess costs the current difficulty, which rises with
+  each failure they cause, and prefetched challenges become invalid once
+  the count rises above their `issued_at` difficulty. The amortised
+  strategy therefore fails.
+- They can identify a username's `recent_failures` count by observing
+  the difficulty of the challenges issued for it. This is already
+  inferable (they are the ones causing failures), and the spec accepts
+  it: no additional metadata is exposed.
+
+### What this does not solve
+
+- Sustained-load griefing at the Tor introduction layer. Tor's PoW
+  reduces it, does not prevent it.
+- Availability. If the attacker's budget exceeds the operator's, the
+  service is degraded or unreachable.
+- Name squatting by an attacker willing to solve the PoW on many names.
+  The PoW raises the cost; the reservation lifetime bounds the
+  individual hold; a determined attacker holds as many names as they
+  can solve for.
+
+### Storage
+
+- Token buckets and replay cache: ephemeral, in memory, per server
+  process. A multi-process deployment must either route by session (so
+  buckets are local) or use a shared store; this is a MariaDB-store
+  problem, not a protocol one.
+- `pow_secret`: also per server process by default. A multi-process
+  deployment must either (a) load-balance so that a challenge fetch and
+  the request that carries its solution go to the same process, or
+  (b) share one `pow_secret` across processes at start. The
+  single-process `cmd/server` uses (a) trivially. The spec does not
+  mandate which; the deployment does.
+- Failed-attempt counters: bounded ring buffer per username, in memory,
+  cleared on success and on expiry. A persistent store may keep them for
+  visibility, but their absence on restart is a documented, bounded loss
+  (an attacker who waits for a restart resets their own escalation).

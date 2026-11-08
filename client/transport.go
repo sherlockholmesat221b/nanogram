@@ -5,6 +5,7 @@ package client
 import (
 	"context"
 
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 )
 
@@ -13,9 +14,10 @@ import (
 // directly. Errors from the server must be mapped to the service errors
 // (for example service.ErrUsernameTaken, service.ErrLoginFailed).
 type Transport interface {
-	RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte) (service.RegisterStartResult, error)
+	PowChallenge(ctx context.Context, purpose, username string) (pow.Challenge, error)
+	RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte, solution *pow.Solution) (service.RegisterStartResult, error)
 	RegisterFinish(ctx context.Context, r service.RegisterFinishRequest) error
-	LoginStart(ctx context.Context, username, kind string, ke1 []byte) (service.LoginStartResult, error)
+	LoginStart(ctx context.Context, username, kind string, ke1 []byte, solution *pow.Solution) (service.LoginStartResult, error)
 	LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.SessionInfo, error)
 	AccountBlobs(ctx context.Context, r service.AuthRequest) ([]service.BlobInfo, error)
 

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/wire"
@@ -28,9 +29,10 @@ const maxBodyBytes = 64 << 10
 // Service is what the handlers need from the service layer. *service.Service
 // satisfies it, and tests can replace it.
 type Service interface {
-	RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte) (service.RegisterStartResult, error)
+	PowChallenge(ctx context.Context, purpose, username string) (pow.Challenge, error)
+	RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte, solution *pow.Solution) (service.RegisterStartResult, error)
 	RegisterFinish(ctx context.Context, r service.RegisterFinishRequest) error
-	LoginStart(ctx context.Context, username, kind string, ke1 []byte) (service.LoginStartResult, error)
+	LoginStart(ctx context.Context, username, kind string, ke1 []byte, solution *pow.Solution) (service.LoginStartResult, error)
 	LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.SessionInfo, error)
 	Authenticate(ctx context.Context, r service.AuthRequest, scope string) (store.Session, error)
 	CurrentBlobs(ctx context.Context, userID []byte, kinds ...byte) ([]service.BlobInfo, error)
@@ -59,6 +61,7 @@ func New(svc Service, logger *log.Logger) http.Handler {
 	h := &handler{svc: svc, log: logger}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+wire.PathPowChallenge, h.powChallenge)
 	mux.HandleFunc("POST "+wire.PathRegisterStart, h.registerStart)
 	mux.HandleFunc("POST "+wire.PathRegisterFinish, h.registerFinish)
 	mux.HandleFunc("POST "+wire.PathLoginStart, h.loginStart)
@@ -143,6 +146,19 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
+func (h *handler) powChallenge(w http.ResponseWriter, r *http.Request) {
+	var req wire.PowChallengeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	challenge, err := h.svc.PowChallenge(r.Context(), req.Purpose, req.Username)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, wire.ChallengeToWire(challenge))
+}
+
 // fail maps a service error to a status and a fixed code. Failed logins and
 // failed authentication share one answer. Anything unexpected is logged here
 // and reported as a plain internal error.
@@ -167,6 +183,12 @@ func (h *handler) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrRecoveryNotSetUp):
 		writeError(w, http.StatusNotFound, "recovery_not_set_up")
 
+	case errors.Is(err, service.ErrPowInvalid):
+		writeError(w, http.StatusPreconditionRequired, "pow_invalid")
+
+	case errors.Is(err, service.ErrBusy):
+		writeError(w, http.StatusTooManyRequests, "busy")
+
 	default:
 		h.log.Printf("internal error: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal")
@@ -179,11 +201,17 @@ func (h *handler) registerStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var solution *pow.Solution
+	if req.Pow != nil {
+		s := wire.SolutionFromWire(*req.Pow)
+		solution = &s
+	}
 	res, err := h.svc.RegisterStart(
 		r.Context(),
 		req.Username,
 		req.PasswordRequest,
 		req.RecoveryRequest,
+		solution,
 	)
 	if err != nil {
 		h.fail(w, err)
@@ -223,7 +251,12 @@ func (h *handler) loginStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.svc.LoginStart(r.Context(), req.Username, req.Kind, req.KE1)
+	var solution *pow.Solution
+	if req.Pow != nil {
+		s := wire.SolutionFromWire(*req.Pow)
+		solution = &s
+	}
+	res, err := h.svc.LoginStart(r.Context(), req.Username, req.Kind, req.KE1, solution)
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -252,6 +285,11 @@ func (h *handler) loginFinish(w http.ResponseWriter, r *http.Request) {
 		SessionID: info.SessionID,
 		UserID:    info.UserID,
 		Scope:     info.Scope,
+		RecentFailures: wire.RecentFailures{
+			Count: info.RecentFailures.Count,
+			First: info.RecentFailures.First.Unix(),
+			Last:  info.RecentFailures.Last.Unix(),
+		},
 	})
 }
 

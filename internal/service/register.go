@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/zkcrypto"
 )
@@ -33,15 +34,22 @@ func (s *Service) RegisterStart(
 	ctx context.Context,
 	username string,
 	passwordReq, recoveryReq []byte,
+	solution *pow.Solution,
 ) (RegisterStartResult, error) {
 	var result RegisterStartResult
 
 	if !usernamePattern.MatchString(username) {
 		return result, ErrInvalidUsername
 	}
-
 	username = canonicalUsername(username)
 
+	now := s.now()
+	if !s.anonBucket.Allow(nil, now) || !s.userBucket.Allow(s.hashedUsername(username), now) {
+		return result, ErrBusy
+	}
+	if err := s.verifyPow("register", username, solution); err != nil {
+		return result, err
+	}
 	userID := make([]byte, 16)
 	if _, err := io.ReadFull(s.rand, userID); err != nil {
 		return result, ErrInternal
@@ -65,7 +73,7 @@ func (s *Service) RegisterStart(
 		}
 	}
 
-	now := s.now()
+	now = s.now()
 	if err := s.store.ReserveUsername(
 		ctx,
 		username,

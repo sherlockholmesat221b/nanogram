@@ -41,7 +41,7 @@ func TestStatusMapping(t *testing.T) {
 		want   error
 	}{
 		{"login start, 401", 401, `{"error":"unauthorized"}`, func(t *Transport) error {
-			_, err := t.LoginStart(ctx, "alice", "password", []byte{1})
+			_, err := t.LoginStart(ctx, "alice", "password", []byte{1}, nil)
 			return err
 		}, service.ErrLoginFailed},
 		{"login finish, 401", 401, `{"error":"unauthorized"}`, func(t *Transport) error {
@@ -53,19 +53,19 @@ func TestStatusMapping(t *testing.T) {
 			return err
 		}, service.ErrUnauthorized},
 		{"username taken", 409, `{"error":"username_taken"}`, func(t *Transport) error {
-			_, err := t.RegisterStart(ctx, "alice", []byte{1}, nil)
+			_, err := t.RegisterStart(ctx, "alice", []byte{1}, nil, nil)
 			return err
 		}, service.ErrUsernameTaken},
 		{"invalid username", 400, `{"error":"invalid_username"}`, func(t *Transport) error {
-			_, err := t.RegisterStart(ctx, "A", []byte{1}, nil)
+			_, err := t.RegisterStart(ctx, "A", []byte{1}, nil, nil)
 			return err
 		}, service.ErrInvalidUsername},
 		{"invalid request", 400, `{"error":"invalid_request"}`, func(t *Transport) error {
-			_, err := t.LoginStart(ctx, "alice", "password", []byte{1})
+			_, err := t.LoginStart(ctx, "alice", "password", []byte{1}, nil)
 			return err
 		}, service.ErrInvalidRequest},
 		{"too large", 413, `{"error":"too_large"}`, func(t *Transport) error {
-			_, err := t.LoginStart(ctx, "alice", "password", []byte{1})
+			_, err := t.LoginStart(ctx, "alice", "password", []byte{1}, nil)
 			return err
 		}, service.ErrInvalidRequest},
 	}
@@ -86,7 +86,7 @@ func TestOtherFailuresAreGeneric(t *testing.T) {
 	for _, status := range []int{500, 503, 404, 302} {
 		srv := httptest.NewServer(answer(status, "secret text from the server"))
 
-		_, err := New(srv.URL, srv.Client()).LoginStart(context.Background(), "alice", "password", []byte{1})
+		_, err := New(srv.URL, srv.Client()).LoginStart(context.Background(), "alice", "password", []byte{1}, nil)
 		srv.Close()
 
 		if err == nil {
@@ -120,7 +120,7 @@ func TestLoginStartSendsJSONAndReadsTheAnswer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := New(srv.URL+"/", srv.Client()).LoginStart(context.Background(), "alice", "recovery", []byte{9})
+	res, err := New(srv.URL+"/", srv.Client()).LoginStart(context.Background(), "alice", "recovery", []byte{9}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,5 +339,22 @@ func TestAConflictIsMapped(t *testing.T) {
 	)
 	if !errors.Is(err, service.ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
+	}
+}
+
+func TestLoginFinishCopiesRecentFailures(t *testing.T) {
+	srv := httptest.NewServer(answer(200,
+		`{"session_id":"AQ==","user_id":"Ag==","scope":"full","recent_failures":{"count":3,"first":1700000000,"last":1700000120}}`))
+	defer srv.Close()
+
+	info, err := New(srv.URL, srv.Client()).LoginFinish(context.Background(), []byte{1}, []byte{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RecentFailures.Count != 3 {
+		t.Fatalf("count = %d, want 3", info.RecentFailures.Count)
+	}
+	if info.RecentFailures.First.Unix() != 1700000000 || info.RecentFailures.Last.Unix() != 1700000120 {
+		t.Fatalf("unix times: %d, %d", info.RecentFailures.First.Unix(), info.RecentFailures.Last.Unix())
 	}
 }

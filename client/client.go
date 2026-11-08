@@ -156,7 +156,16 @@ func (c *Client) Register(
 		recoveryReq = recoveryClient.RegistrationInit(recoverySecret).Serialize()
 	}
 
-	start, err := c.T.RegisterStart(ctx, username, passwordRequest, recoveryReq)
+	challenge, err := c.T.PowChallenge(ctx, "register", username)
+	if err != nil {
+		return result, err
+	}
+	solution, err := solveChallenge(challenge)
+	if err != nil {
+		return result, err
+	}
+
+	start, err := c.T.RegisterStart(ctx, username, passwordRequest, recoveryReq, &solution)
 	if err != nil {
 		return result, err
 	}
@@ -326,9 +335,30 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 		return nil, err
 	}
 
-	start, err := c.T.LoginStart(ctx, username, kind, oc.LoginInit(password).Serialize())
-	if err != nil {
-		return nil, err
+	var start service.LoginStartResult
+	for attempt := 0; attempt < 2; attempt++ {
+		oc, err = auth.NewConfiguration().Client()
+		if err != nil {
+			return nil, err
+		}
+
+		challenge, err := c.T.PowChallenge(ctx, "login", username)
+		if err != nil {
+			return nil, err
+		}
+		solution, err := solveChallenge(challenge)
+		if err != nil {
+			return nil, err
+		}
+
+		start, err = c.T.LoginStart(ctx, username, kind, oc.LoginInit(password).Serialize(), &solution)
+		if err != nil {
+			if errors.Is(err, service.ErrPowInvalid) && attempt == 0 {
+				continue
+			}
+			return nil, err
+		}
+		break
 	}
 
 	if len(start.UserID) != userIDSize {
@@ -367,11 +397,12 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 	}
 
 	session := &Session{
-		Username:   username,
-		UserID:     info.UserID,
-		ID:         info.SessionID,
-		Scope:      info.Scope,
-		requestKey: requestKey,
+		Username:       username,
+		UserID:         info.UserID,
+		ID:             info.SessionID,
+		Scope:          info.Scope,
+		RecentFailures: info.RecentFailures,
+		requestKey:     requestKey,
 	}
 
 	blobs, err := c.T.AccountBlobs(ctx, session.Sign("GET", wire.PathAccountBlobs, nil))

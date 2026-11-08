@@ -30,6 +30,7 @@ Working name: nanogram (may change). Nothing here is final until listed under "D
 - Post-quantum protection for the login handshake and for signatures. Stored data uses random 256-bit symmetric keys and ML-KEM. OPAQUE (login) is built on elliptic curves and has no standard post-quantum version yet, as far as we know. Signing keys are Ed25519 for now.
 - Forward secrecy in v1. A stolen password exposes history.
 - Deletion from old backups or from the other person's copy.
+- Availability under sustained load from a funded attacker. Rate limits and proof of work make abusive volume more expensive; they do not make it free, and they do not promise that a targeted denial of service will be survived. This is unchanged from the position taken before part 7 of the protocol; part 7 restates it because the mechanisms introduced there might suggest otherwise.
 
 ## Clients
 

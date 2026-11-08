@@ -12,6 +12,7 @@ import (
 
 	"github.com/bytemare/opaque"
 
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/zkcrypto"
 )
@@ -63,7 +64,7 @@ func (f *registrationFixture) registerUser(t *testing.T, withRecovery bool) []by
 		recoveryRequest = recoveryClient.RegistrationInit([]byte(testRecovery)).Serialize()
 	}
 
-	start, err := f.service.RegisterStart(ctx, testUsername, passwordRequest, recoveryRequest)
+	start, err := f.service.RegisterStart(ctx, testUsername, passwordRequest, recoveryRequest, f.solution(t, "register", testUsername))
 	if err != nil {
 		t.Fatalf("RegisterStart: %v", err)
 	}
@@ -107,6 +108,24 @@ type loginAttempt struct {
 
 // attemptLogin runs LoginStart and the client side of the OPAQUE login. It
 // does not call the service's LoginFinish.
+func (f *registrationFixture) trySolution(purpose, username string) *pow.Solution {
+	c, err := f.service.PowChallenge(context.Background(), purpose, username)
+	if err != nil {
+		return nil
+	}
+	counter, err := pow.Solve(c, 1<<20)
+	if err != nil {
+		return nil
+	}
+	return &pow.Solution{
+		Nonce:           c.Nonce,
+		Difficulty:      c.Difficulty,
+		IssuedAt:        c.IssuedAt,
+		MAC:             c.MAC,
+		SolutionCounter: counter,
+	}
+}
+
 func (f *registrationFixture) attemptLogin(
 	t *testing.T,
 	username, kind string,
@@ -117,7 +136,7 @@ func (f *registrationFixture) attemptLogin(
 	client := f.client(t)
 	ke1 := client.LoginInit([]byte(secret)).Serialize()
 
-	start, err := f.service.LoginStart(context.Background(), username, kind, ke1)
+	start, err := f.service.LoginStart(context.Background(), username, kind, ke1, f.solution(t, "login", username))
 	if err != nil {
 		t.Fatalf("LoginStart: %v", err)
 	}
@@ -436,7 +455,7 @@ func TestLoginStartRejectsBadInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := f.service.LoginStart(context.Background(), tt.username, tt.kind, tt.ke1)
+			_, err := f.service.LoginStart(context.Background(), tt.username, tt.kind, tt.ke1, f.trySolution("login", tt.username))
 			if !errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("error = %v, want ErrInvalidRequest", err)
 			}

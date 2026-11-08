@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/auth"
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store/memstore"
@@ -23,16 +24,20 @@ type direct struct {
 	svc *service.Service
 }
 
-func (d direct) RegisterStart(ctx context.Context, username string, p, r []byte) (service.RegisterStartResult, error) {
-	return d.svc.RegisterStart(ctx, username, p, r)
+func (d direct) PowChallenge(ctx context.Context, purpose, username string) (pow.Challenge, error) {
+	return d.svc.PowChallenge(ctx, purpose, username)
+}
+
+func (d direct) RegisterStart(ctx context.Context, username string, p, r []byte, solution *pow.Solution) (service.RegisterStartResult, error) {
+	return d.svc.RegisterStart(ctx, username, p, r, solution)
 }
 
 func (d direct) RegisterFinish(ctx context.Context, r service.RegisterFinishRequest) error {
 	return d.svc.RegisterFinish(ctx, r)
 }
 
-func (d direct) LoginStart(ctx context.Context, username, kind string, ke1 []byte) (service.LoginStartResult, error) {
-	return d.svc.LoginStart(ctx, username, kind, ke1)
+func (d direct) LoginStart(ctx context.Context, username, kind string, ke1 []byte, solution *pow.Solution) (service.LoginStartResult, error) {
+	return d.svc.LoginStart(ctx, username, kind, ke1, solution)
 }
 
 func (d direct) LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.SessionInfo, error) {
@@ -125,9 +130,9 @@ type counting struct {
 	registerStarts int
 }
 
-func (c *counting) RegisterStart(ctx context.Context, username string, p, r []byte) (service.RegisterStartResult, error) {
+func (c *counting) RegisterStart(ctx context.Context, username string, p, r []byte, solution *pow.Solution) (service.RegisterStartResult, error) {
 	c.registerStarts++
-	return c.Transport.RegisterStart(ctx, username, p, r)
+	return c.Transport.RegisterStart(ctx, username, p, r, solution)
 }
 
 // tampering changes the blobs the server returns.

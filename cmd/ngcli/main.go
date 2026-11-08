@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -301,6 +302,13 @@ func login(ctx context.Context, o options, countBlobs bool) error {
 
 	for _, warning := range session.Warnings {
 		fmt.Fprintf(os.Stderr, "Warning: %s\n", warning)
+	}
+
+	if session.RecentFailures.Count > 0 {
+		fmt.Fprintf(os.Stderr, "%d attempt(s) on your name since your last login (first %s, last %s)\n",
+			session.RecentFailures.Count,
+			session.RecentFailures.First.Format(time.RFC3339),
+			session.RecentFailures.Last.Format(time.RFC3339))
 	}
 
 	if countBlobs {

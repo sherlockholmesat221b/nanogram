@@ -19,12 +19,13 @@ type Account struct {
 
 // Session is a logged in session. Sign makes the signed request headers.
 type Session struct {
-	Username string
-	UserID   []byte
-	ID       []byte
-	Scope    string
-	Account  *Account
-	Warnings []string // things the user should hear about, for example a changed KEK version
+	Username       string
+	UserID         []byte
+	ID             []byte
+	Scope          string
+	Account        *Account
+	Warnings       []string // things the user should hear about, for example a changed KEK version
+	RecentFailures service.RecentFailures
 
 	mu         sync.Mutex
 	requestKey []byte

@@ -53,7 +53,7 @@ func TestOtherSpellingsOfATakenNameAreTaken(t *testing.T) {
 	request := f.client(t).RegistrationInit([]byte(testPassword)).Serialize()
 
 	for _, spelling := range spellings(testUsername) {
-		_, err := f.service.RegisterStart(context.Background(), spelling, request, nil)
+		_, err := f.service.RegisterStart(context.Background(), spelling, request, nil, f.solution(t, "register", spelling))
 		if !errors.Is(err, ErrUsernameTaken) {
 			t.Fatalf("%q: error = %v, want ErrUsernameTaken", spelling, err)
 		}

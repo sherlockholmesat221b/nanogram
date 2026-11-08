@@ -55,14 +55,33 @@ func (c *Client) RecoverWithPhrase(
 	}
 	defer wipe(recoveryWrap)
 
-	oc, err := auth.NewConfiguration().Client()
-	if err != nil {
-		return nil, err
-	}
+	var (
+		oc    *opaque.Client
+		start service.LoginStartResult
+	)
+	for attempt := 0; attempt < 2; attempt++ {
+		oc, err = auth.NewConfiguration().Client()
+		if err != nil {
+			return nil, err
+		}
 
-	start, err := c.T.LoginStart(ctx, username, "recovery", oc.LoginInit(loginSecret).Serialize())
-	if err != nil {
-		return nil, err
+		challenge, err := c.T.PowChallenge(ctx, "login", username)
+		if err != nil {
+			return nil, err
+		}
+		solution, err := solveChallenge(challenge)
+		if err != nil {
+			return nil, err
+		}
+
+		start, err = c.T.LoginStart(ctx, username, "recovery", oc.LoginInit(loginSecret).Serialize(), &solution)
+		if err != nil {
+			if errors.Is(err, service.ErrPowInvalid) && attempt == 0 {
+				continue
+			}
+			return nil, err
+		}
+		break
 	}
 	if len(start.UserID) != userIDSize {
 		return nil, ErrProtocol

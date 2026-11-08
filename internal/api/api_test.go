@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/pow"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/wire"
@@ -26,9 +27,10 @@ var errNotSet = errors.New("stub function not set")
 // stubService lets a test replace single service methods. A method that was
 // not set returns an error.
 type stubService struct {
-	registerStart  func(context.Context, string, []byte, []byte) (service.RegisterStartResult, error)
+	registerStart  func(context.Context, string, []byte, []byte, *pow.Solution) (service.RegisterStartResult, error)
+	powChallenge   func(context.Context, string, string) (pow.Challenge, error)
 	registerFinish func(context.Context, service.RegisterFinishRequest) error
-	loginStart     func(context.Context, string, string, []byte) (service.LoginStartResult, error)
+	loginStart     func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error)
 	loginFinish    func(context.Context, []byte, []byte) (service.SessionInfo, error)
 	authenticate   func(context.Context, service.AuthRequest, string) (store.Session, error)
 	currentBlobs   func(context.Context, []byte, ...byte) ([]service.BlobInfo, error)
@@ -43,11 +45,11 @@ type stubService struct {
 	recoveryDisable       func(context.Context, []byte) error
 }
 
-func (s *stubService) RegisterStart(ctx context.Context, username string, p, r []byte) (service.RegisterStartResult, error) {
+func (s *stubService) RegisterStart(ctx context.Context, username string, p, r []byte, solution *pow.Solution) (service.RegisterStartResult, error) {
 	if s.registerStart == nil {
 		return service.RegisterStartResult{}, errNotSet
 	}
-	return s.registerStart(ctx, username, p, r)
+	return s.registerStart(ctx, username, p, r, solution)
 }
 
 func (s *stubService) RegisterFinish(ctx context.Context, r service.RegisterFinishRequest) error {
@@ -57,11 +59,11 @@ func (s *stubService) RegisterFinish(ctx context.Context, r service.RegisterFini
 	return s.registerFinish(ctx, r)
 }
 
-func (s *stubService) LoginStart(ctx context.Context, username, kind string, ke1 []byte) (service.LoginStartResult, error) {
+func (s *stubService) LoginStart(ctx context.Context, username, kind string, ke1 []byte, solution *pow.Solution) (service.LoginStartResult, error) {
 	if s.loginStart == nil {
 		return service.LoginStartResult{}, errNotSet
 	}
-	return s.loginStart(ctx, username, kind, ke1)
+	return s.loginStart(ctx, username, kind, ke1, solution)
 }
 
 func (s *stubService) LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.SessionInfo, error) {
@@ -134,7 +136,7 @@ func TestRegisterStartPassesDataThrough(t *testing.T) {
 	var gotPassword, gotRecovery []byte
 
 	svc := &stubService{
-		registerStart: func(_ context.Context, username string, p, r []byte) (service.RegisterStartResult, error) {
+		registerStart: func(_ context.Context, username string, p, r []byte, _ *pow.Solution) (service.RegisterStartResult, error) {
 			gotUser, gotPassword, gotRecovery = username, p, r
 			return service.RegisterStartResult{
 				UserID:           []byte{1},
@@ -225,7 +227,7 @@ func TestLoginRoundTrip(t *testing.T) {
 	var gotKE3 []byte
 
 	svc := &stubService{
-		loginStart: func(_ context.Context, _ string, kind string, _ []byte) (service.LoginStartResult, error) {
+		loginStart: func(_ context.Context, _ string, kind string, _ []byte, _ *pow.Solution) (service.LoginStartResult, error) {
 			gotKind = kind
 			return service.LoginStartResult{LoginID: []byte{1}, UserID: []byte{2}, KE2: []byte{3}}, nil
 		},
@@ -279,7 +281,7 @@ func TestErrorMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := &stubService{
-				loginStart: func(context.Context, string, string, []byte) (service.LoginStartResult, error) {
+				loginStart: func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error) {
 					return service.LoginStartResult{}, tt.err
 				},
 			}
@@ -325,7 +327,7 @@ func TestFailedLoginAndFailedAuthenticationLookTheSame(t *testing.T) {
 
 func TestContentTypeIsChecked(t *testing.T) {
 	svc := &stubService{
-		loginStart: func(context.Context, string, string, []byte) (service.LoginStartResult, error) {
+		loginStart: func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error) {
 			return service.LoginStartResult{}, nil
 		},
 	}
@@ -349,7 +351,7 @@ func TestContentTypeIsChecked(t *testing.T) {
 
 func TestBadJSONIsRefused(t *testing.T) {
 	svc := &stubService{
-		loginStart: func(context.Context, string, string, []byte) (service.LoginStartResult, error) {
+		loginStart: func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error) {
 			t.Error("the service was called")
 			return service.LoginStartResult{}, nil
 		},
@@ -380,7 +382,7 @@ func TestBadJSONIsRefused(t *testing.T) {
 
 func TestOversizedBodyIsRefused(t *testing.T) {
 	svc := &stubService{
-		loginStart: func(context.Context, string, string, []byte) (service.LoginStartResult, error) {
+		loginStart: func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error) {
 			t.Error("the service was called")
 			return service.LoginStartResult{}, nil
 		},
@@ -410,7 +412,7 @@ func TestWrongMethodAndUnknownPath(t *testing.T) {
 
 func TestResponsesAreNeverCached(t *testing.T) {
 	svc := &stubService{
-		loginStart: func(context.Context, string, string, []byte) (service.LoginStartResult, error) {
+		loginStart: func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error) {
 			return service.LoginStartResult{LoginID: []byte{1}}, nil
 		},
 	}
@@ -855,4 +857,11 @@ func TestRecoveryBlobReturnsTheKEKHeader(t *testing.T) {
 	if len(res.Blobs) != 1 || res.KEKHeader.Version != 3 || len(res.KEKHeader.Hash) != 32 {
 		t.Fatalf("unexpected response %+v", res)
 	}
+}
+
+func (s *stubService) PowChallenge(ctx context.Context, purpose, username string) (pow.Challenge, error) {
+	if s.powChallenge == nil {
+		return pow.Challenge{}, errNotSet
+	}
+	return s.powChallenge(ctx, purpose, username)
 }
