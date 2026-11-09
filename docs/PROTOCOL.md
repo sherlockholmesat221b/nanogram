@@ -784,25 +784,33 @@ mode 0600 in a 0700 directory, atomic rename. The `server` field lets the
 client refuse to use a pin file that was created for a different server
 address.
 
-#### Mode 2: onion-key signature (`.onion` deployments, not implemented)
+#### Mode 2: onion-key signature (`.onion` deployments, implemented)
 
 A `.onion` address is a hash of the service's Ed25519 public key, so the
 onion address itself authenticates the service. For onion deployments the
-server can additionally sign its OPAQUE public key with the onion service
+server additionally signs its OPAQUE public key with the onion service
 key:
 
-- `register/start`, `login/start`, and `/v1/server-info` return an
-  additional field `onion_signature`: Ed25519 signature over
+- `register/start`, `login/start`, and `/v1/server-info` return
+  `onion_signature`: Ed25519 signature over
   `"zkc/v1/onion" | server_public_key`, produced by the onion service's
   private key.
+- The server reads the onion key from a file passed to `-onion-key`. When
+  the flag is empty, no signature is produced and the field is absent.
 - The client parses the `.onion` address it was given, recovers the onion
   public key (base32-decode, take the first 32 bytes), and verifies the
-  signature. If verification fails, `ErrServerKeyChanged`.
+  signature. If verification fails, `ErrServerKeyChanged` and the client
+  does not proceed to `LoginFinish`/`RegisterFinish`.
+- If the field is absent on a `.onion` server, the client adds a warning
+  to `RegisterResult.Warnings` / `Session.Warnings` and falls back to
+  mode 1. This is not fatal.
 
 This protects against a MITM between the client and the genuine server,
 provided the client was given the correct `.onion` address. It does not
 help if the user was given a fake `.onion` address, which is the same
-out-of-band problem mode 1 solves.
+out-of-band problem mode 1 solves. The two modes compose: the onion
+signature closes the first-contact window automatically, and the pin
+catches a later change of the OPAQUE key on the same onion service.
 
 #### Mode 3: transparency log (not implemented)
 

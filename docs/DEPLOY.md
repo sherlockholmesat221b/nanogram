@@ -136,3 +136,41 @@ To update the server, replace the binary and restart. Existing sessions
 survive (the session MAC keys are in the database, not the binary);
 existing login challenges do not (the PoW secret regenerates at start, as
 Part 7 requires). Clients handle the challenge regeneration automatically.
+
+## 9. Signing the OPAQUE public key with the onion service key
+
+When serving on a `.onion` address, configure the server to sign its
+OPAQUE public key with the onion service key. The `.onion` address itself
+commits to the onion public key, so a client that verifies the signature
+knows it is talking to the service that owns the address. This closes the
+first-contact window without requiring the user to compare fingerprints.
+
+The onion service key is `hs_ed25519_secret_key` in the hidden service
+directory. It belongs to the Tor user, not to the nanogram user. Copy it
+to a path the nanogram user can read:
+
+    sudo cp /var/lib/tor/nanogram/hs_ed25519_secret_key /var/lib/nanogram/onion_key
+    sudo chown nanogram:nanogram /var/lib/nanogram/onion_key
+    sudo chmod 0600 /var/lib/nanogram/onion_key
+
+Start the server with the flag:
+
+    bin/server -addr 127.0.0.1:8080 \
+        -keys /var/lib/nanogram/server-keys.json \
+        -onion-key /var/lib/nanogram/onion_key
+
+Re-copy the file if the hidden service is regenerated.
+
+When mode 2 is configured:
+
+- The client verifies the signature automatically and refuses a mismatch
+  (`ErrServerKeyChanged`) before the OPAQUE exchange.
+- The client does not prompt the user to compare fingerprints on first
+  contact, because the address already commits to the key.
+- The user can still pin the OPAQUE key. The pin catches a later rotation
+  of the OPAQUE key on the same onion service, which the onion signature
+  alone cannot.
+
+When mode 2 is not configured, `.onion` clients fall back to mode 1 and
+print a warning. Both modes protect against different attacks; mode 2 is
+the stronger default for `.onion` and you should enable it if possible.
