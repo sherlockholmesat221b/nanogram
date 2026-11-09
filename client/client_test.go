@@ -746,3 +746,24 @@ func TestLoginRefusesChangedPin(t *testing.T) {
 		t.Fatalf("error = %v, want ErrServerKeyChanged", err)
 	}
 }
+
+func TestRegisterRefusesStalePinBeforeReserving(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+
+	pins := NewMemPins()
+	pins.Put([]byte("not the real server key"))
+	c := New(direct{r.svc}, NewMemHeads(), pins)
+
+	pass := newPassphrase(t)
+	_, err := c.Register(ctx, "alice", pass, pass, false)
+	if !errors.Is(err, ErrServerKeyChanged) {
+		t.Fatalf("error = %v, want ErrServerKeyChanged", err)
+	}
+
+	// The name must be free: the failed attempt did not reserve it.
+	fresh := New(direct{r.svc}, NewMemHeads(), NewMemPins())
+	if _, err := fresh.Register(ctx, "alice", pass, pass, false); err != nil {
+		t.Fatalf("register after failed pin check: %v", err)
+	}
+}

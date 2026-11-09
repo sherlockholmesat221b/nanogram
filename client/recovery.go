@@ -55,6 +55,14 @@ func (c *Client) RecoverWithPhrase(
 	}
 	defer wipe(recoveryWrap)
 
+	serverInfo, err := c.T.ServerInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.checkPin(serverInfo); err != nil {
+		return nil, err
+	}
+
 	var (
 		oc    *opaque.Client
 		start service.LoginStartResult
@@ -83,6 +91,10 @@ func (c *Client) RecoverWithPhrase(
 		}
 		break
 	}
+	if !bytes.Equal(start.ServerPublicKey, serverInfo) {
+		return nil, ErrServerKeyChanged
+	}
+
 	if len(start.UserID) != userIDSize {
 		return nil, ErrProtocol
 	}

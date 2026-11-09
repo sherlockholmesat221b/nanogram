@@ -410,3 +410,19 @@ func TestPinningOverHTTP(t *testing.T) {
 		t.Fatalf("error = %v, want ErrServerKeyChanged", err)
 	}
 }
+
+func TestStalePinDoesNotBlockTheNameOverHTTP(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	pass := passphrase(t)
+
+	stale := client.New(s.transport, client.NewMemHeads(), client.NewMemPins())
+	stale.Pins.Put([]byte("not the real server key"))
+	if _, err := stale.Register(ctx, "alice", pass, pass, false); !errors.Is(err, client.ErrServerKeyChanged) {
+		t.Fatalf("error = %v, want ErrServerKeyChanged", err)
+	}
+
+	if _, err := s.client.Register(ctx, "alice", pass, pass, false); err != nil {
+		t.Fatalf("register after failed pin check: %v", err)
+	}
+}

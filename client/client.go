@@ -187,6 +187,14 @@ func (c *Client) Register(
 		recoveryReq = recoveryClient.RegistrationInit(recoverySecret).Serialize()
 	}
 
+	serverInfo, err := c.T.ServerInfo(ctx)
+	if err != nil {
+		return result, err
+	}
+	if err := c.checkPin(serverInfo); err != nil {
+		return result, err
+	}
+
 	challenge, err := c.T.PowChallenge(ctx, "register", username)
 	if err != nil {
 		return result, err
@@ -201,8 +209,8 @@ func (c *Client) Register(
 		return result, err
 	}
 
-	if err := c.checkPin(start.ServerPublicKey); err != nil {
-		return result, err
+	if !bytes.Equal(start.ServerPublicKey, serverInfo) {
+		return result, ErrServerKeyChanged
 	}
 
 	if len(start.UserID) != userIDSize ||
@@ -347,7 +355,7 @@ func (c *Client) Register(
 		}
 	}
 
-	if err := c.savePin(start.ServerPublicKey); err != nil {
+	if err := c.savePin(serverInfo); err != nil {
 		return result, fmt.Errorf("saving the pin: %w", err)
 	}
 
@@ -371,6 +379,14 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 
 	oc, err := auth.NewConfiguration().Client()
 	if err != nil {
+		return nil, err
+	}
+
+	serverInfo, err := c.T.ServerInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.checkPin(serverInfo); err != nil {
 		return nil, err
 	}
 
@@ -400,8 +416,8 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 		break
 	}
 
-	if err := c.checkPin(start.ServerPublicKey); err != nil {
-		return nil, err
+	if !bytes.Equal(start.ServerPublicKey, serverInfo) {
+		return nil, ErrServerKeyChanged
 	}
 
 	if len(start.UserID) != userIDSize {
@@ -430,7 +446,7 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 		return nil, err
 	}
 
-	if err := c.savePin(start.ServerPublicKey); err != nil {
+	if err := c.savePin(serverInfo); err != nil {
 		return nil, fmt.Errorf("saving the pin: %w", err)
 	}
 
