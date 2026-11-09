@@ -45,6 +45,7 @@ type RegisterStartResponse struct {
 	PasswordResponse []byte `json:"password_response"`
 	RecoveryResponse []byte `json:"recovery_response,omitempty"`
 	ServerPublicKey  []byte `json:"server_public_key"`
+	OnionSignature   []byte `json:"onion_signature,omitempty"`
 }
 
 // Blob is an encrypted blob together with the metadata the chain needs.
@@ -85,6 +86,7 @@ type LoginStartResponse struct {
 	UserID          []byte `json:"user_id"`
 	KE2             []byte `json:"ke2"`
 	ServerPublicKey []byte `json:"server_public_key"`
+	OnionSignature  []byte `json:"onion_signature,omitempty"`
 }
 
 // LoginFinishRequest completes a login.

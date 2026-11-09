@@ -137,6 +137,7 @@ func (s *Service) LoginStart(
 		UserID:          userID,
 		KE2:             ke2,
 		ServerPublicKey: s.auth.PublicKey(),
+		OnionSignature:  s.auth.OnionSignature(),
 	}, nil
 }
 

@@ -92,6 +92,7 @@ func (s *Service) RegisterStart(
 		PasswordResponse: passwordResponse,
 		RecoveryResponse: recoveryResponse,
 		ServerPublicKey:  s.auth.PublicKey(),
+		OnionSignature:   s.auth.OnionSignature(),
 	}, nil
 }
 

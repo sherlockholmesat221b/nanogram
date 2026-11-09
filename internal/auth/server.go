@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
@@ -21,8 +22,9 @@ type StoredUser struct {
 
 // Server handles OPAQUE registration and login using the configured context and server keys.
 type Server struct {
-	conf *opaque.Configuration
-	keys ServerKeys
+	conf     *opaque.Configuration
+	keys     ServerKeys
+	onionKey ed25519.PrivateKey // nil disables signing
 }
 
 // NewServer creates a server using NewConfiguration and the supplied server keys.
@@ -37,6 +39,22 @@ func NewServer(keys ServerKeys) *Server {
 // copy.
 func (s *Server) PublicKey() []byte {
 	return append([]byte(nil), s.keys.PublicKey...)
+}
+
+// SetOnionKey configures the Ed25519 key used to sign the OPAQUE public
+// key on responses. A nil key disables signing and clears any previous key.
+func (s *Server) SetOnionKey(key ed25519.PrivateKey) {
+	s.onionKey = key
+}
+
+// OnionSignature returns ed25519.Sign(onionKey, "zkc/v1/onion" | PublicKey())
+// or nil when no onion key is configured.
+func (s *Server) OnionSignature() []byte {
+	if s.onionKey == nil {
+		return nil
+	}
+	msg := append([]byte(zkcrypto.LabelOnion), s.keys.PublicKey...)
+	return ed25519.Sign(s.onionKey, msg)
 }
 
 // RegistrationResponse rejects user IDs that are not 16 bytes and returns a serialized registration response.

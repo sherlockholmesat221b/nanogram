@@ -25,6 +25,7 @@ type RegisterStartResult struct {
 	PasswordResponse []byte
 	RecoveryResponse []byte
 	ServerPublicKey  []byte
+	OnionSignature   []byte
 }
 
 // BlobUpload describes a blob submitted during registration.
@@ -65,6 +66,7 @@ type LoginStartResult struct {
 	UserID          []byte
 	KE2             []byte
 	ServerPublicKey []byte
+	OnionSignature  []byte
 }
 
 // SessionInfo describes an authenticated session.
@@ -105,4 +107,11 @@ type RecentFailures struct {
 	Count int
 	First time.Time
 	Last  time.Time
+}
+
+// ServerInfoResult is what ServerInfo returns: the server's OPAQUE public
+// key and, when the server signs it with its onion key, that signature.
+type ServerInfoResult struct {
+	PublicKey      []byte
+	OnionSignature []byte
 }

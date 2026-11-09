@@ -29,7 +29,7 @@ var errNotSet = errors.New("stub function not set")
 type stubService struct {
 	registerStart  func(context.Context, string, []byte, []byte, *pow.Solution) (service.RegisterStartResult, error)
 	powChallenge   func(context.Context, string, string) (pow.Challenge, error)
-	serverInfo     func(context.Context) ([]byte, error)
+	serverInfo     func(context.Context) (service.ServerInfoResult, error)
 	registerFinish func(context.Context, service.RegisterFinishRequest) error
 	loginStart     func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error)
 	loginFinish    func(context.Context, []byte, []byte) (service.SessionInfo, error)
@@ -867,17 +867,17 @@ func (s *stubService) PowChallenge(ctx context.Context, purpose, username string
 	return s.powChallenge(ctx, purpose, username)
 }
 
-func (s *stubService) ServerInfo(ctx context.Context) ([]byte, error) {
+func (s *stubService) ServerInfo(ctx context.Context) (service.ServerInfoResult, error) {
 	if s.serverInfo == nil {
-		return nil, errNotSet
+		return service.ServerInfoResult{}, errNotSet
 	}
 	return s.serverInfo(ctx)
 }
 
 func TestServerInfoReturnsTheKey(t *testing.T) {
 	svc := &stubService{
-		serverInfo: func(context.Context) ([]byte, error) {
-			return []byte{1, 2, 3}, nil
+		serverInfo: func(context.Context) (service.ServerInfoResult, error) {
+			return service.ServerInfoResult{PublicKey: []byte{1, 2, 3}}, nil
 		},
 	}
 

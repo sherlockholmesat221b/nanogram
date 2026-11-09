@@ -9,4 +9,5 @@ const PathServerInfo = "/v1/server-info"
 // ServerInfoResponse is the body of a server-info answer.
 type ServerInfoResponse struct {
 	ServerPublicKey []byte `json:"server_public_key"`
+	OnionSignature  []byte `json:"onion_signature,omitempty"`
 }

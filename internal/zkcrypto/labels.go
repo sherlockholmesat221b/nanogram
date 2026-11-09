@@ -12,4 +12,5 @@ const (
 	LabelBlob          = "zkc/v1/blob"
 	LabelRecoveryLogin = "zkc/v1/recovery-login"
 	LabelRecoveryCred  = "zkc/v1/recovery-cred"
+	LabelOnion         = "zkc/v1/onion"
 )
