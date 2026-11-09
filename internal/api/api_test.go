@@ -29,6 +29,7 @@ var errNotSet = errors.New("stub function not set")
 type stubService struct {
 	registerStart  func(context.Context, string, []byte, []byte, *pow.Solution) (service.RegisterStartResult, error)
 	powChallenge   func(context.Context, string, string) (pow.Challenge, error)
+	serverInfo     func(context.Context) ([]byte, error)
 	registerFinish func(context.Context, service.RegisterFinishRequest) error
 	loginStart     func(context.Context, string, string, []byte, *pow.Solution) (service.LoginStartResult, error)
 	loginFinish    func(context.Context, []byte, []byte) (service.SessionInfo, error)
@@ -864,4 +865,32 @@ func (s *stubService) PowChallenge(ctx context.Context, purpose, username string
 		return pow.Challenge{}, errNotSet
 	}
 	return s.powChallenge(ctx, purpose, username)
+}
+
+func (s *stubService) ServerInfo(ctx context.Context) ([]byte, error) {
+	if s.serverInfo == nil {
+		return nil, errNotSet
+	}
+	return s.serverInfo(ctx)
+}
+
+func TestServerInfoReturnsTheKey(t *testing.T) {
+	svc := &stubService{
+		serverInfo: func(context.Context) ([]byte, error) {
+			return []byte{1, 2, 3}, nil
+		},
+	}
+
+	rec := serve(New(svc, nil), "GET", wire.PathServerInfo, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	var res wire.ServerInfoResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(res.ServerPublicKey, []byte{1, 2, 3}) {
+		t.Fatalf("key %x", res.ServerPublicKey)
+	}
 }

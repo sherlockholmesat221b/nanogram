@@ -31,16 +31,47 @@ const (
 type Client struct {
 	T     Transport
 	Heads HeadStore
+	Pins  PinStore
 }
 
 // New returns a Client. When heads is nil the remembered blob versions are
 // kept in memory only, which gives no protection across restarts.
-func New(t Transport, heads HeadStore) *Client {
+func New(t Transport, heads HeadStore, pins PinStore) *Client {
 	if heads == nil {
 		heads = NewMemHeads()
 	}
+	// pins may stay nil: no pinning, no checks.
+	return &Client{T: t, Heads: heads, Pins: pins}
+}
 
-	return &Client{T: t, Heads: heads}
+// checkPin returns ErrServerKeyChanged if this device pinned a different
+// key. A nil Pins or an empty pin means no check.
+func (c *Client) checkPin(key []byte) error {
+	if c.Pins == nil {
+		return nil
+	}
+	if pinned, ok := c.Pins.Get(); ok && !bytes.Equal(pinned, key) {
+		return ErrServerKeyChanged
+	}
+	return nil
+}
+
+// savePin records the key on first successful contact. It is a no-op when
+// a pin already exists.
+func (c *Client) savePin(key []byte) error {
+	if c.Pins == nil {
+		return nil
+	}
+	if _, ok := c.Pins.Get(); ok {
+		return nil
+	}
+	return c.Pins.Put(key)
+}
+
+// ServerInfo fetches the server's OPAQUE public key without a login. It is
+// what the CLI uses to print a fingerprint before deciding whether to pin.
+func (c *Client) ServerInfo(ctx context.Context) ([]byte, error) {
+	return c.T.ServerInfo(ctx)
 }
 
 // RegisterResult is what a successful registration returns. RecoveryPhrase is
@@ -167,6 +198,10 @@ func (c *Client) Register(
 
 	start, err := c.T.RegisterStart(ctx, username, passwordRequest, recoveryReq, &solution)
 	if err != nil {
+		return result, err
+	}
+
+	if err := c.checkPin(start.ServerPublicKey); err != nil {
 		return result, err
 	}
 
@@ -312,6 +347,10 @@ func (c *Client) Register(
 		}
 	}
 
+	if err := c.savePin(start.ServerPublicKey); err != nil {
+		return result, fmt.Errorf("saving the pin: %w", err)
+	}
+
 	return result, nil
 }
 
@@ -361,6 +400,10 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 		break
 	}
 
+	if err := c.checkPin(start.ServerPublicKey); err != nil {
+		return nil, err
+	}
+
 	if len(start.UserID) != userIDSize {
 		return nil, ErrProtocol
 	}
@@ -385,6 +428,10 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 			return nil, ErrLoginFailed
 		}
 		return nil, err
+	}
+
+	if err := c.savePin(start.ServerPublicKey); err != nil {
+		return nil, fmt.Errorf("saving the pin: %w", err)
 	}
 
 	if !bytes.Equal(info.UserID, start.UserID) {

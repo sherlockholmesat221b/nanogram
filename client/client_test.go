@@ -44,6 +44,10 @@ func (d direct) LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.S
 	return d.svc.LoginFinish(ctx, loginID, ke3)
 }
 
+func (d direct) ServerInfo(ctx context.Context) ([]byte, error) {
+	return d.svc.ServerInfo(ctx)
+}
+
 // AccountBlobs does what the HTTP handler does: authenticate, then read.
 func (d direct) AccountBlobs(ctx context.Context, r service.AuthRequest) ([]service.BlobInfo, error) {
 	session, err := d.svc.Authenticate(ctx, r, "full")
@@ -178,7 +182,7 @@ func newRig(t *testing.T) *rig {
 			return r.now
 		},
 	})
-	r.client = New(direct{r.svc}, r.heads)
+	r.client = New(direct{r.svc}, r.heads, nil)
 
 	return r
 }
@@ -339,7 +343,7 @@ func TestTakenUsernameIsReported(t *testing.T) {
 func TestBadPassphrasesNeverReachTheServer(t *testing.T) {
 	r := newRig(t)
 	counter := &counting{Transport: direct{r.svc}}
-	c := New(counter, nil)
+	c := New(counter, nil, nil)
 
 	good := newPassphrase(t)
 
@@ -438,7 +442,7 @@ func TestRollbackAndTamperingAreDetected(t *testing.T) {
 	}
 
 	// A device that has seen nothing cannot notice either, and logs in.
-	fresh := New(direct{r.svc}, NewMemHeads())
+	fresh := New(direct{r.svc}, NewMemHeads(), nil)
 	if _, err := fresh.Login(context.Background(), "alice", passphrase); err != nil {
 		t.Fatalf("fresh device: %v", err)
 	}
@@ -504,7 +508,7 @@ func TestChangedBlobsAreRejected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := New(tampering{Transport: direct{r.svc}, change: tt.change}, r.heads)
+			c := New(tampering{Transport: direct{r.svc}, change: tt.change}, r.heads, nil)
 
 			if _, err := c.Login(context.Background(), "alice", passphrase); !errors.Is(err, tt.wantKnown) {
 				t.Fatalf("device with memory: error = %v, want %v", err, tt.wantKnown)
@@ -514,7 +518,7 @@ func TestChangedBlobsAreRejected(t *testing.T) {
 			}
 
 			fresh := NewMemHeads()
-			c = New(tampering{Transport: direct{r.svc}, change: tt.change}, fresh)
+			c = New(tampering{Transport: direct{r.svc}, change: tt.change}, fresh, nil)
 
 			if _, err := c.Login(context.Background(), "alice", passphrase); !errors.Is(err, tt.wantFresh) {
 				t.Fatalf("fresh device: error = %v, want %v", err, tt.wantFresh)
@@ -677,7 +681,7 @@ func TestAnotherDeviceSeesAChainedChangeAsAWarning(t *testing.T) {
 	passphrase, _ := r.register(t, false)
 
 	// A second device that logs in before the change.
-	other := New(direct{r.svc}, NewMemHeads())
+	other := New(direct{r.svc}, NewMemHeads(), nil)
 	if _, err := other.Login(ctx, "alice", passphrase); err != nil {
 		t.Fatal(err)
 	}
@@ -693,5 +697,52 @@ func TestAnotherDeviceSeesAChainedChangeAsAWarning(t *testing.T) {
 	}
 	if len(again.Warnings) != 1 || !strings.Contains(again.Warnings[0], "kek") {
 		t.Fatalf("warnings: %v", again.Warnings)
+	}
+}
+
+func TestPinOnFirstContact(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+
+	pins := NewMemPins()
+	c := New(direct{r.svc}, NewMemHeads(), pins)
+
+	pass := newPassphrase(t)
+	if _, err := c.Register(ctx, "alice", pass, pass, false); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned, ok := pins.Get()
+	if !ok || len(pinned) == 0 {
+		t.Fatal("the client did not pin the server key")
+	}
+
+	// Second login on the same client must not fail the check.
+	if _, err := c.Login(ctx, "alice", pass); err != nil {
+		t.Fatalf("second login after pin: %v", err)
+	}
+}
+
+func TestLoginRefusesChangedPin(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+
+	pins := NewMemPins()
+	c := New(direct{r.svc}, NewMemHeads(), pins)
+
+	pass := newPassphrase(t)
+	if _, err := c.Register(ctx, "alice", pass, pass, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pretend this device has pinned a different key.
+	wrong := []byte("not the real server key")
+	if err := pins.Put(wrong); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := c.Login(ctx, "alice", pass)
+	if !errors.Is(err, ErrServerKeyChanged) {
+		t.Fatalf("error = %v, want ErrServerKeyChanged", err)
 	}
 }

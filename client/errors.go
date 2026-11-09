@@ -38,4 +38,12 @@ var (
 
 	// ErrHeadsNotSaved means the remembered blob versions could not be saved.
 	ErrHeadsNotSaved = errors.New("the remembered blob versions could not be saved")
+
+	// ErrServerKeyChanged is returned when the server presents a public key
+	// that differs from the one this device pinned on first contact.
+	ErrServerKeyChanged = errors.New("the server's public key has changed since this device pinned it")
+
+	// ErrPinServerMismatch is returned by NewFilePins when the pin file was
+	// created for a different server address.
+	ErrPinServerMismatch = errors.New("the pin file belongs to a different server")
 )

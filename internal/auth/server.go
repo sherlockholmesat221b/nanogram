@@ -33,6 +33,12 @@ func NewServer(keys ServerKeys) *Server {
 	}
 }
 
+// PublicKey returns the server's OPAQUE public key. The returned slice is a
+// copy.
+func (s *Server) PublicKey() []byte {
+	return append([]byte(nil), s.keys.PublicKey...)
+}
+
 // RegistrationResponse rejects user IDs that are not 16 bytes and returns a serialized registration response.
 func (s *Server) RegistrationResponse(request, userID []byte) ([]byte, error) {
 	if len(userID) != 16 {

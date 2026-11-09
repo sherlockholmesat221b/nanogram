@@ -31,6 +31,7 @@ Working name: nanogram (may change). Nothing here is final until listed under "D
 - Forward secrecy in v1. A stolen password exposes history.
 - Deletion from old backups or from the other person's copy.
 - Availability under sustained load from a funded attacker. Rate limits and proof of work make abusive volume more expensive; they do not make it free, and they do not promise that a targeted denial of service will be survived. This is unchanged from the position taken before part 7 of the protocol; part 7 restates it because the mechanisms introduced there might suggest otherwise.
+- First-contact server identity, without out-of-band comparison. See Part 8 of the protocol.
 
 ## Clients
 

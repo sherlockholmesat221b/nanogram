@@ -133,9 +133,10 @@ func (s *Service) LoginStart(
 	}
 
 	return LoginStartResult{
-		LoginID: loginID,
-		UserID:  userID,
-		KE2:     ke2,
+		LoginID:         loginID,
+		UserID:          userID,
+		KE2:             ke2,
+		ServerPublicKey: s.auth.PublicKey(),
 	}, nil
 }
 

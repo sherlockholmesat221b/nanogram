@@ -15,6 +15,7 @@ import (
 // (for example service.ErrUsernameTaken, service.ErrLoginFailed).
 type Transport interface {
 	PowChallenge(ctx context.Context, purpose, username string) (pow.Challenge, error)
+	ServerInfo(ctx context.Context) ([]byte, error)
 	RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte, solution *pow.Solution) (service.RegisterStartResult, error)
 	RegisterFinish(ctx context.Context, r service.RegisterFinishRequest) error
 	LoginStart(ctx context.Context, username, kind string, ke1 []byte, solution *pow.Solution) (service.LoginStartResult, error)

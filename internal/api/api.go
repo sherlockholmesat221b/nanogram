@@ -30,6 +30,7 @@ const maxBodyBytes = 64 << 10
 // satisfies it, and tests can replace it.
 type Service interface {
 	PowChallenge(ctx context.Context, purpose, username string) (pow.Challenge, error)
+	ServerInfo(ctx context.Context) ([]byte, error)
 	RegisterStart(ctx context.Context, username string, passwordReq, recoveryReq []byte, solution *pow.Solution) (service.RegisterStartResult, error)
 	RegisterFinish(ctx context.Context, r service.RegisterFinishRequest) error
 	LoginStart(ctx context.Context, username, kind string, ke1 []byte, solution *pow.Solution) (service.LoginStartResult, error)
@@ -62,6 +63,7 @@ func New(svc Service, logger *log.Logger) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+wire.PathPowChallenge, h.powChallenge)
+	mux.HandleFunc("GET "+wire.PathServerInfo, h.serverInfo)
 	mux.HandleFunc("POST "+wire.PathRegisterStart, h.registerStart)
 	mux.HandleFunc("POST "+wire.PathRegisterFinish, h.registerFinish)
 	mux.HandleFunc("POST "+wire.PathLoginStart, h.loginStart)
@@ -159,6 +161,15 @@ func (h *handler) powChallenge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, wire.ChallengeToWire(challenge))
 }
 
+func (h *handler) serverInfo(w http.ResponseWriter, r *http.Request) {
+	key, err := h.svc.ServerInfo(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, wire.ServerInfoResponse{ServerPublicKey: key})
+}
+
 // fail maps a service error to a status and a fixed code. Failed logins and
 // failed authentication share one answer. Anything unexpected is logged here
 // and reported as a plain internal error.
@@ -222,6 +233,7 @@ func (h *handler) registerStart(w http.ResponseWriter, r *http.Request) {
 		UserID:           res.UserID,
 		PasswordResponse: res.PasswordResponse,
 		RecoveryResponse: res.RecoveryResponse,
+		ServerPublicKey:  res.ServerPublicKey,
 	})
 }
 
@@ -263,9 +275,10 @@ func (h *handler) loginStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, wire.LoginStartResponse{
-		LoginID: res.LoginID,
-		UserID:  res.UserID,
-		KE2:     res.KE2,
+		LoginID:         res.LoginID,
+		UserID:          res.UserID,
+		KE2:             res.KE2,
+		ServerPublicKey: res.ServerPublicKey,
 	})
 }
 

@@ -169,6 +169,7 @@ func (t *Transport) RegisterStart(ctx context.Context, username string, password
 		UserID:           res.UserID,
 		PasswordResponse: res.PasswordResponse,
 		RecoveryResponse: res.RecoveryResponse,
+		ServerPublicKey:  res.ServerPublicKey,
 	}, nil
 }
 
@@ -191,7 +192,12 @@ func (t *Transport) LoginStart(ctx context.Context, username, kind string, ke1 [
 	if err := t.post(ctx, wire.PathLoginStart, req, http.StatusOK, service.ErrLoginFailed, &res); err != nil {
 		return service.LoginStartResult{}, err
 	}
-	return service.LoginStartResult{LoginID: res.LoginID, UserID: res.UserID, KE2: res.KE2}, nil
+	return service.LoginStartResult{
+		LoginID:         res.LoginID,
+		UserID:          res.UserID,
+		KE2:             res.KE2,
+		ServerPublicKey: res.ServerPublicKey,
+	}, nil
 }
 
 // LoginFinish implements client.Transport.
@@ -358,4 +364,14 @@ func (t *Transport) PowChallenge(ctx context.Context, purpose, username string) 
 		return pow.Challenge{}, err
 	}
 	return wire.ChallengeFromWire(res), nil
+}
+
+// ServerInfo implements client.Transport. It fetches the server's OPAQUE
+// public key without authentication.
+func (t *Transport) ServerInfo(ctx context.Context) ([]byte, error) {
+	var res wire.ServerInfoResponse
+	if err := t.do(ctx, http.MethodGet, wire.PathServerInfo, nil, nil, http.StatusOK, service.ErrUnauthorized, &res); err != nil {
+		return nil, err
+	}
+	return res.ServerPublicKey, nil
 }

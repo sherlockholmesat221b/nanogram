@@ -91,6 +91,7 @@ func (s *Service) RegisterStart(
 		UserID:           userID,
 		PasswordResponse: passwordResponse,
 		RecoveryResponse: recoveryResponse,
+		ServerPublicKey:  s.auth.PublicKey(),
 	}, nil
 }
 

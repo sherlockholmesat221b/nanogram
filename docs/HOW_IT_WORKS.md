@@ -38,6 +38,7 @@ The server now holds a record (it cannot be turned back into the passphrase), en
 3. Client runs Argon2id (about 2 to 3 seconds on a slow phone) and tries to open the record using the passphrase. A wrong passphrase fails here, on the client. The server learns nothing. A right one gives a proof, a session key and the export_key.
 4. Client sends the proof. (`service.LoginFinish`) Server takes the stored state (it can be used exactly once, even if the proof is wrong), checks the proof, and creates the session. It stores only a key derived from the session key, never the raw one.
 5. Client fetches its blobs, opens the KEK blob with a key derived from the export_key, then opens the MEK and identity blobs with the KEK.
+6. On first contact, the server's public key is shown as a fingerprint and pinned. Every later login compares the key with the pin. A change produces `ErrServerKeyChanged`, not `ErrLoginFailed`; the user runs `ngcli pin` to see both fingerprints and decides.
 
 ## Using a session
 
@@ -94,6 +95,7 @@ About 5,550 lines of logic and 7,860 lines of tests in total. The part that deci
 - Identities in OPAQUE: client identity is the user ID (or the recovery credential ID), server identity is nil.
 - A password change replaces the KEK blob, not the KEK. Every older session ends, and only after the new password is proven.
 - A recovery reset re-wraps the same KEK. Rotation replaces the phrase, not the KEK. The old phrase stops working only after rotation, never before.
+- A changed server key is detected before the OPAQUE exchange and reported separately from a login failure.
 
 ## Not built yet
 

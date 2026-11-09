@@ -24,6 +24,7 @@ type RegisterStartResult struct {
 	UserID           []byte
 	PasswordResponse []byte
 	RecoveryResponse []byte
+	ServerPublicKey  []byte
 }
 
 // BlobUpload describes a blob submitted during registration.
@@ -60,9 +61,10 @@ type BlobInfo struct {
 
 // LoginStartResult contains the server's response to a login start.
 type LoginStartResult struct {
-	LoginID []byte
-	UserID  []byte
-	KE2     []byte
+	LoginID         []byte
+	UserID          []byte
+	KE2             []byte
+	ServerPublicKey []byte
 }
 
 // SessionInfo describes an authenticated session.

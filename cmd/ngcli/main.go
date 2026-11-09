@@ -35,6 +35,7 @@ type options struct {
 	server   string
 	user     string
 	insecure bool
+	accept   bool
 }
 
 // checkServer accepts https, and plain http only to this machine or to an
@@ -71,7 +72,7 @@ func checkServer(raw string, insecure bool) error {
 	}
 }
 
-func parseOptions(command string, args []string) (options, error) {
+func parseOptions(command string, args []string, requireUser bool) (options, error) {
 	var o options
 
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -79,6 +80,7 @@ func parseOptions(command string, args []string) (options, error) {
 	fs.StringVar(&o.server, "server", defaultServer, "server URL")
 	fs.StringVar(&o.user, "user", "", "username")
 	fs.BoolVar(&o.insecure, "insecure", false, "allow plain HTTP to a server that is not this machine or an onion address")
+	fs.BoolVar(&o.accept, "accept", false, "accept the current server fingerprint as the pin")
 
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -86,10 +88,10 @@ func parseOptions(command string, args []string) (options, error) {
 	if fs.NArg() != 0 {
 		return o, errors.New("unexpected positional arguments")
 	}
-	if o.user == "" {
+	if requireUser && o.user == "" {
 		return o, errors.New("-user is required")
 	}
-	if !client.ValidUsername(o.user) {
+	if o.user != "" && !client.ValidUsername(o.user) {
 		return o, errors.New("invalid username: use 3 to 32 characters from a-z, 0-9, _ and .")
 	}
 
@@ -121,18 +123,23 @@ func requireTerminal() error {
 	return nil
 }
 
-func newClient(server string) (*client.Client, error) {
+func newClient(server string) (*client.Client, client.PinStore, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	heads, err := client.NewFileHeads(filepath.Join(dir, "nanogram", "heads.json"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return client.New(httptransport.New(server, nil), heads), nil
+	pins, err := client.NewFilePins(filepath.Join(dir, "nanogram", "pins.json"), server)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return client.New(httptransport.New(server, nil), heads, pins), pins, nil
 }
 
 func register(ctx context.Context, o options) error {
@@ -140,7 +147,7 @@ func register(ctx context.Context, o options) error {
 		return err
 	}
 
-	c, err := newClient(o.server)
+	c, _, err := newClient(o.server)
 	if err != nil {
 		return err
 	}
@@ -188,7 +195,7 @@ func suggest() error {
 // passwd changes the password: it logs in with the current one, then asks for
 // the new one twice.
 func passwd(ctx context.Context, o options) error {
-	c, err := newClient(o.server)
+	c, _, err := newClient(o.server)
 	if err != nil {
 		return err
 	}
@@ -234,7 +241,7 @@ func recoverPassword(ctx context.Context, o options) error {
 		return err
 	}
 
-	c, err := newClient(o.server)
+	c, _, err := newClient(o.server)
 	if err != nil {
 		return err
 	}
@@ -281,7 +288,7 @@ func recoverPassword(ctx context.Context, o options) error {
 // login logs in. With countBlobs it then asks for the blobs once more and
 // prints how many there are, otherwise it prints the user id and the scope.
 func login(ctx context.Context, o options, countBlobs bool) error {
-	c, err := newClient(o.server)
+	c, _, err := newClient(o.server)
 	if err != nil {
 		return err
 	}
@@ -327,20 +334,90 @@ func login(ctx context.Context, o options, countBlobs bool) error {
 	return nil
 }
 
+// reportNewPin prints the fingerprint once, the first time a pin is
+// established, so the user can compare it with the published one.
+func reportNewPin(pins client.PinStore, wasPinned bool) {
+	if wasPinned || pins == nil {
+		return
+	}
+	if key, ok := pins.Get(); ok {
+		fmt.Fprintf(os.Stderr, "Server fingerprint (first contact): %s\n", client.Fingerprint(key))
+		fmt.Fprintln(os.Stderr, "Compare this with the fingerprint published by the server operator.")
+	}
+}
+
+func pinServer(ctx context.Context, o options) error {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	pins, err := client.NewFilePins(filepath.Join(dir, "nanogram", "pins.json"), o.server)
+	if err != nil {
+		return err
+	}
+
+	c := client.New(httptransport.New(o.server, nil), nil, nil)
+	key, err := c.ServerInfo(ctx)
+	if err != nil {
+		return err
+	}
+	fp := client.Fingerprint(key)
+
+	if o.accept {
+		if err := pins.Put(key); err != nil {
+			return err
+		}
+		fmt.Printf("Pinned: %s\n", fp)
+		fmt.Println("Confirm this matches the fingerprint published by the operator.")
+		return nil
+	}
+
+	if pinned, ok := pins.Get(); ok {
+		existing := client.Fingerprint(pinned)
+		switch {
+		case existing == fp:
+			fmt.Printf("Pinned: %s (matches the server)\n", existing)
+		default:
+			fmt.Printf("WARNING: pinned is %s but the server presents %s\n", existing, fp)
+			fmt.Println("If the change is unexpected, do not proceed. If it is expected, run 'ngcli pin --accept'.")
+		}
+	} else {
+		fmt.Printf("Not pinned. Server presents: %s\n", fp)
+		fmt.Println("If this matches the fingerprint published by the operator, run 'ngcli pin --accept'.")
+	}
+	return nil
+}
+
+func forgetPin(o options) error {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	pins, err := client.NewFilePins(filepath.Join(dir, "nanogram", "pins.json"), o.server)
+	if err != nil {
+		return err
+	}
+	if err := pins.Clear(); err != nil {
+		return err
+	}
+	fmt.Println("Pin forgotten.")
+	return nil
+}
+
 func run(args []string) error {
 	fmt.Fprintln(os.Stderr, "ngcli is a test tool for developers. Do not use it for accounts you care about.")
 
 	if len(args) == 0 {
-		return errors.New("usage: ngcli <register|login|passwd|blobs> -user USER [-server URL], or ngcli suggest")
+		return errors.New("usage: ngcli <register|login|passwd|recover|blobs|pin|forget-pin> [-user USER] [-server URL], or ngcli suggest")
 	}
-
 	command := args[0]
 
 	if command == "suggest" {
 		return suggest()
 	}
 
-	o, err := parseOptions(command, args[1:])
+	requireUser := command != "pin" && command != "forget-pin"
+	o, err := parseOptions(command, args[1:], requireUser)
 	if err != nil {
 		return err
 	}
@@ -356,8 +433,12 @@ func run(args []string) error {
 		return recoverPassword(context.Background(), o)
 	case "blobs":
 		return login(context.Background(), o, true)
+	case "pin":
+		return pinServer(context.Background(), o)
+	case "forget-pin":
+		return forgetPin(o)
 	default:
-		return fmt.Errorf("unknown command %q (use register, login, passwd, blobs or suggest)", command)
+		return fmt.Errorf("unknown command %q (use register, login, passwd, recover, blobs, pin, forget-pin or suggest)", command)
 	}
 }
 

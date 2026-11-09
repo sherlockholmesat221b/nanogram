@@ -37,11 +37,11 @@ func TestCheckServer(t *testing.T) {
 }
 
 func TestParseOptionsNeedsAUser(t *testing.T) {
-	if _, err := parseOptions("login", []string{"-server", "http://127.0.0.1:8080"}); err == nil {
+	if _, err := parseOptions("login", []string{"-server", "http://127.0.0.1:8080"}, true); err == nil {
 		t.Fatal("a missing -user was accepted")
 	}
 
-	o, err := parseOptions("login", []string{"-user", "alice"})
+	o, err := parseOptions("login", []string{"-user", "alice"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,14 +52,14 @@ func TestParseOptionsNeedsAUser(t *testing.T) {
 
 func TestParseOptionsChecksTheUsernameFormat(t *testing.T) {
 	for _, user := range []string{"a-b", "ab", "has space", "wayyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy_too_long"} {
-		if _, err := parseOptions("register", []string{"-user", user}); err == nil {
+		if _, err := parseOptions("register", []string{"-user", user}, true); err == nil {
 			t.Fatalf("the username %q was accepted", user)
 		}
 	}
 }
 
 func TestParseOptionsRefusesARemotePlainServer(t *testing.T) {
-	if _, err := parseOptions("login", []string{"-user", "alice", "-server", "http://example.com"}); err == nil {
+	if _, err := parseOptions("login", []string{"-user", "alice", "-server", "http://example.com"}, true); err == nil {
 		t.Fatal("plain HTTP to a remote host was accepted")
 	}
 }

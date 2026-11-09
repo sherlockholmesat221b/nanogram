@@ -51,7 +51,7 @@ func newStack(t *testing.T) *stack {
 	return &stack{
 		server:    server,
 		transport: transport,
-		client:    client.New(transport, nil),
+		client:    client.New(transport, nil, nil),
 	}
 }
 
@@ -379,5 +379,34 @@ func TestChangePasswordOverHTTP(t *testing.T) {
 	}
 	if blobs, err := s.transport.AccountBlobs(ctx, fresh.Sign("GET", wire.PathAccountBlobs, nil)); err != nil || len(blobs) != 3 {
 		t.Fatalf("new session: %d blobs, %v", len(blobs), err)
+	}
+}
+
+func TestPinningOverHTTP(t *testing.T) {
+	s := newStack(t)
+	ctx := context.Background()
+	pass := passphrase(t)
+
+	pins := client.NewMemPins()
+	c := client.New(s.transport, client.NewMemHeads(), pins)
+
+	if _, err := c.Register(ctx, "alice", pass, pass, false); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned, ok := pins.Get()
+	if !ok || len(pinned) == 0 {
+		t.Fatal("registration did not pin the key")
+	}
+
+	if _, err := c.Login(ctx, "alice", pass); err != nil {
+		t.Fatalf("login after pin: %v", err)
+	}
+
+	// A different device that pins a different key must be refused.
+	wrong := client.New(s.transport, client.NewMemHeads(), client.NewMemPins())
+	wrong.Pins.Put(bytes.Repeat([]byte{0x99}, 32))
+	if _, err := wrong.Login(ctx, "alice", pass); !errors.Is(err, client.ErrServerKeyChanged) {
+		t.Fatalf("error = %v, want ErrServerKeyChanged", err)
 	}
 }

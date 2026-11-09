@@ -44,6 +44,7 @@ type RegisterStartResponse struct {
 	UserID           []byte `json:"user_id"`
 	PasswordResponse []byte `json:"password_response"`
 	RecoveryResponse []byte `json:"recovery_response,omitempty"`
+	ServerPublicKey  []byte `json:"server_public_key"`
 }
 
 // Blob is an encrypted blob together with the metadata the chain needs.
@@ -80,9 +81,10 @@ type LoginStartRequest struct {
 
 // LoginStartResponse carries the login id, the user id and the OPAQUE reply.
 type LoginStartResponse struct {
-	LoginID []byte `json:"login_id"`
-	UserID  []byte `json:"user_id"`
-	KE2     []byte `json:"ke2"`
+	LoginID         []byte `json:"login_id"`
+	UserID          []byte `json:"user_id"`
+	KE2             []byte `json:"ke2"`
+	ServerPublicKey []byte `json:"server_public_key"`
 }
 
 // LoginFinishRequest completes a login.

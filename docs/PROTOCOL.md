@@ -720,3 +720,140 @@ session bucket; their identity is the session MAC.
   cleared on success and on expiry. A persistent store may keep them for
   visibility, but their absence on restart is a documented, bounded loss
   (an attacker who waits for a restart resets their own escalation).
+
+## Part 8: server identity and first contact
+
+This part covers how a client decides it is talking to the right server. It
+exists because OPAQUE, on its own, does not distinguish "the server is
+genuine and your password is wrong" from "the server is a fake and cannot
+complete the exchange". Both surface as `ErrLoginFailed`, and the user
+cannot act on a failure they cannot name.
+
+### What this part promises
+
+- After the first successful login or registration on a device, a change of
+  the server's OPAQUE public key produces `ErrServerKeyChanged`, not
+  `ErrLoginFailed`. The two failures can be told apart.
+- A MITM cannot complete an OPAQUE exchange without the server's private
+  key, whatever it claims. The pin does not make this stronger; it makes
+  the failure legible.
+- A user who compares the fingerprint shown by the client with the
+  fingerprint published by the operator has no first-contact vulnerability.
+
+### What this part does not promise
+
+- First-contact trust when the user does not compare the fingerprint. The
+  pin is trust-on-first-use by default; if the first contact is with a fake
+  server, the fake server's key is pinned, and every later login from this
+  device will go to the fake server until the user runs
+  `ngcli forget-pin` and starts over.
+- Anonymity. The fingerprint is public information and does not identify
+  any user.
+
+### Modes
+
+Three modes are specified. Mode 1 is implemented; modes 2 and 3 are
+specified so they can be added without reworking the design.
+
+#### Mode 1: fingerprint publication and trust-on-first-use pinning
+
+The server's OPAQUE public key is returned in three responses:
+
+- `POST /v1/register/start` → `server_public_key`
+- `POST /v1/login/start` → `server_public_key`
+- `GET /v1/server-info` → `server_public_key` (unauthenticated)
+
+The client computes `SHA256:<base64-raw(sha256(key))>` and stores it on
+first successful login or registration. On every later login or
+registration, the client compares the key returned by the server with the
+stored pin before doing the OPAQUE exchange. A mismatch returns
+`ErrServerKeyChanged` and the client does not proceed to
+`LoginFinish`/`RegisterFinish`.
+
+The operator publishes the fingerprint on a channel separate from the
+server: the repository README, a signed release, a page in GitLab Pages.
+The user compares the fingerprint printed by `ngcli` on first contact with
+the published one. That comparison, correctly performed, is the only thing
+that closes the first-contact window.
+
+Fingerprint format: `SHA256:` followed by the standard base64
+(no padding) of `sha256(server_public_key)`. Same format as SSH.
+
+Pin storage: a JSON file, `{"version":1,"server":"<url>","server_public_key":"<base64>"}`,
+mode 0600 in a 0700 directory, atomic rename. The `server` field lets the
+client refuse to use a pin file that was created for a different server
+address.
+
+#### Mode 2: onion-key signature (`.onion` deployments, not implemented)
+
+A `.onion` address is a hash of the service's Ed25519 public key, so the
+onion address itself authenticates the service. For onion deployments the
+server can additionally sign its OPAQUE public key with the onion service
+key:
+
+- `register/start`, `login/start`, and `/v1/server-info` return an
+  additional field `onion_signature`: Ed25519 signature over
+  `"zkc/v1/onion" | server_public_key`, produced by the onion service's
+  private key.
+- The client parses the `.onion` address it was given, recovers the onion
+  public key (base32-decode, take the first 32 bytes), and verifies the
+  signature. If verification fails, `ErrServerKeyChanged`.
+
+This protects against a MITM between the client and the genuine server,
+provided the client was given the correct `.onion` address. It does not
+help if the user was given a fake `.onion` address, which is the same
+out-of-band problem mode 1 solves.
+
+#### Mode 3: transparency log (not implemented)
+
+The server publishes an append-only Merkle log of its OPAQUE public key
+history. Each key rotation (initial registration, key change) appends an
+entry. The server publishes the latest root at each epoch, and clients
+monitor the log to verify that their view matches the published root.
+
+This makes a key substitution detectable *after the fact*, not before.
+It does not close the first-contact window (there is no prior entry to
+check against on first use). It requires either a second service operated
+by the same operator or a third-party bulletin board, neither of which the
+project currently has.
+
+### What an attacker who has read this can do
+
+- Substitute the server's key on first contact. If the user does not
+  compare the fingerprint, this is not detectable. If the user does
+  compare, it is.
+- Substitute the server's key after first contact. This returns
+  `ErrServerKeyChanged` at `LoginStart`, before any secret leaves the
+  client. The user can then run `ngcli pin` to see both fingerprints and
+  decide whether to accept the change.
+- Cause a legitimate user to lose access by changing the server key
+  without warning. The user is not denied; they are shown the new
+  fingerprint and can accept it, or run `ngcli forget-pin` and re-verify
+  against the published fingerprint.
+
+### Wire changes
+
+| Endpoint | Scope | Added field |
+|---|---|---|
+| POST /v1/register/start | unauth | `server_public_key` |
+| POST /v1/login/start | unauth | `server_public_key` |
+| GET /v1/server-info | unauth | `{ server_public_key }` |
+
+`/v1/server-info` is unauthenticated and returns only public data. It is
+not charged to a token bucket; the response is a few dozen bytes and the
+cost is JSON marshalling.
+
+No new error codes on the wire. `ErrServerKeyChanged` is a client-side
+error, produced by comparing the returned key with the local pin.
+
+### Interaction with other parts
+
+- The pin is checked **before** the OPAQUE exchange, so a MITM does not
+  get the client to compute `ke3` (which would be a wasted Argon2id run).
+- The pin is saved **after** the OPAQUE exchange succeeds, so a MITM
+  cannot pin its key by causing a spurious failure in the client. To make
+  a client pin a fake key, an attacker would have to complete OPAQUE with
+  the real password, which requires the real server's OPAQUE private key.
+- The pinning mechanism is orthogonal to Part 7. Rate limits and proof of
+  work apply to the endpoints independently; the pin is a per-device
+  decision made by the client, not a server-side rule.
