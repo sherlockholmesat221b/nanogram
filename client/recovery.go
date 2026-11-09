@@ -59,7 +59,12 @@ func (c *Client) RecoverWithPhrase(
 	if err != nil {
 		return nil, err
 	}
-	if err := c.checkPin(serverInfo); err != nil {
+
+	if _, err := CheckOnion(c.T.ServerURL(), serverInfo.PublicKey, serverInfo.OnionSignature); err != nil {
+		return nil, err
+	}
+
+	if err := c.checkPin(serverInfo.PublicKey); err != nil {
 		return nil, err
 	}
 
@@ -91,7 +96,7 @@ func (c *Client) RecoverWithPhrase(
 		}
 		break
 	}
-	if !bytes.Equal(start.ServerPublicKey, serverInfo) {
+	if !bytes.Equal(start.ServerPublicKey, serverInfo.PublicKey) {
 		return nil, ErrServerKeyChanged
 	}
 

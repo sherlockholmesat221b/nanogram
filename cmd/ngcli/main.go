@@ -357,14 +357,14 @@ func pinServer(ctx context.Context, o options) error {
 	}
 
 	c := client.New(httptransport.New(o.server, nil), nil, nil)
-	key, err := c.ServerInfo(ctx)
+	info, err := c.ServerInfo(ctx)
 	if err != nil {
 		return err
 	}
-	fp := client.Fingerprint(key)
+	fp := client.Fingerprint(info.PublicKey)
 
 	if o.accept {
-		if err := pins.Put(key); err != nil {
+		if err := pins.Put(info.PublicKey); err != nil {
 			return err
 		}
 		fmt.Printf("Pinned: %s\n", fp)

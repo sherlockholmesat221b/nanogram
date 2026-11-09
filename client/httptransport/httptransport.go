@@ -170,6 +170,7 @@ func (t *Transport) RegisterStart(ctx context.Context, username string, password
 		PasswordResponse: res.PasswordResponse,
 		RecoveryResponse: res.RecoveryResponse,
 		ServerPublicKey:  res.ServerPublicKey,
+		OnionSignature:   res.OnionSignature,
 	}, nil
 }
 
@@ -197,6 +198,7 @@ func (t *Transport) LoginStart(ctx context.Context, username, kind string, ke1 [
 		UserID:          res.UserID,
 		KE2:             res.KE2,
 		ServerPublicKey: res.ServerPublicKey,
+		OnionSignature:  res.OnionSignature,
 	}, nil
 }
 
@@ -368,10 +370,16 @@ func (t *Transport) PowChallenge(ctx context.Context, purpose, username string) 
 
 // ServerInfo implements client.Transport. It fetches the server's OPAQUE
 // public key without authentication.
-func (t *Transport) ServerInfo(ctx context.Context) ([]byte, error) {
+func (t *Transport) ServerInfo(ctx context.Context) (service.ServerInfoResult, error) {
 	var res wire.ServerInfoResponse
 	if err := t.do(ctx, http.MethodGet, wire.PathServerInfo, nil, nil, http.StatusOK, service.ErrUnauthorized, &res); err != nil {
-		return nil, err
+		return service.ServerInfoResult{}, err
 	}
-	return res.ServerPublicKey, nil
+	return service.ServerInfoResult{
+		PublicKey:      res.ServerPublicKey,
+		OnionSignature: res.OnionSignature,
+	}, nil
 }
+
+// ServerURL returns the base URL the transport was created with.
+func (t *Transport) ServerURL() string { return t.base }

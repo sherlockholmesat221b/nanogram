@@ -44,13 +44,11 @@ func (d direct) LoginFinish(ctx context.Context, loginID, ke3 []byte) (service.S
 	return d.svc.LoginFinish(ctx, loginID, ke3)
 }
 
-func (d direct) ServerInfo(ctx context.Context) ([]byte, error) {
-	info, err := d.svc.ServerInfo(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return info.PublicKey, nil
+func (d direct) ServerInfo(ctx context.Context) (service.ServerInfoResult, error) {
+	return d.svc.ServerInfo(ctx)
 }
+
+func (d direct) ServerURL() string { return "" }
 
 // AccountBlobs does what the HTTP handler does: authenticate, then read.
 func (d direct) AccountBlobs(ctx context.Context, r service.AuthRequest) ([]service.BlobInfo, error) {

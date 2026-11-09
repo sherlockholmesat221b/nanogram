@@ -68,9 +68,10 @@ func (c *Client) savePin(key []byte) error {
 	return c.Pins.Put(key)
 }
 
-// ServerInfo fetches the server's OPAQUE public key without a login. It is
-// what the CLI uses to print a fingerprint before deciding whether to pin.
-func (c *Client) ServerInfo(ctx context.Context) ([]byte, error) {
+// ServerInfo fetches the server's OPAQUE public key and, if the server is
+// configured with an onion key, its signature. It is what the CLI uses to
+// print a fingerprint and verify the onion binding before pinning.
+func (c *Client) ServerInfo(ctx context.Context) (service.ServerInfoResult, error) {
 	return c.T.ServerInfo(ctx)
 }
 
@@ -80,6 +81,7 @@ func (c *Client) ServerInfo(ctx context.Context) ([]byte, error) {
 type RegisterResult struct {
 	UserID         []byte
 	RecoveryPhrase string
+	Warnings       []string
 }
 
 func wipe(b []byte) {
@@ -191,7 +193,13 @@ func (c *Client) Register(
 	if err != nil {
 		return result, err
 	}
-	if err := c.checkPin(serverInfo); err != nil {
+
+	onionWarning, err := CheckOnion(c.T.ServerURL(), serverInfo.PublicKey, serverInfo.OnionSignature)
+	if err != nil {
+		return result, err
+	}
+
+	if err := c.checkPin(serverInfo.PublicKey); err != nil {
 		return result, err
 	}
 
@@ -209,7 +217,7 @@ func (c *Client) Register(
 		return result, err
 	}
 
-	if !bytes.Equal(start.ServerPublicKey, serverInfo) {
+	if !bytes.Equal(start.ServerPublicKey, serverInfo.PublicKey) {
 		return result, ErrServerKeyChanged
 	}
 
@@ -341,6 +349,9 @@ func (c *Client) Register(
 	}
 
 	result = RegisterResult{UserID: userID, RecoveryPhrase: phrase}
+	if onionWarning != "" {
+		result.Warnings = append(result.Warnings, onionWarning)
+	}
 
 	for _, h := range []struct {
 		kind zkcrypto.BlobKind
@@ -355,7 +366,7 @@ func (c *Client) Register(
 		}
 	}
 
-	if err := c.savePin(serverInfo); err != nil {
+	if err := c.savePin(serverInfo.PublicKey); err != nil {
 		return result, fmt.Errorf("saving the pin: %w", err)
 	}
 
@@ -386,7 +397,13 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 	if err != nil {
 		return nil, err
 	}
-	if err := c.checkPin(serverInfo); err != nil {
+
+	onionWarning, err := CheckOnion(c.T.ServerURL(), serverInfo.PublicKey, serverInfo.OnionSignature)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := c.checkPin(serverInfo.PublicKey); err != nil {
 		return nil, err
 	}
 
@@ -416,7 +433,7 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 		break
 	}
 
-	if !bytes.Equal(start.ServerPublicKey, serverInfo) {
+	if !bytes.Equal(start.ServerPublicKey, serverInfo.PublicKey) {
 		return nil, ErrServerKeyChanged
 	}
 
@@ -446,7 +463,7 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 		return nil, err
 	}
 
-	if err := c.savePin(serverInfo); err != nil {
+	if err := c.savePin(serverInfo.PublicKey); err != nil {
 		return nil, fmt.Errorf("saving the pin: %w", err)
 	}
 
@@ -482,6 +499,10 @@ func (c *Client) login(ctx context.Context, username, passphrase, kind string, a
 
 	session.Account = account
 	session.kekVersion, session.kekHash = kekHead.Version, kekHead.Hash
+
+	if onionWarning != "" {
+		warnings = append(warnings, onionWarning)
+	}
 	session.Warnings = warnings
 
 	return session, nil
