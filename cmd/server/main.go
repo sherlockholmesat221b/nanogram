@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"flag"
@@ -22,6 +23,7 @@ import (
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/auth"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/service"
 	"gitlab.com/sherlockholmesat221b/nanogram/internal/store/memstore"
+	"gitlab.com/sherlockholmesat221b/nanogram/internal/tor"
 )
 
 func main() {
@@ -32,10 +34,18 @@ func main() {
 }
 
 // build loads the server keys and returns the store and the HTTP handler.
-func build(keysPath string, logger *log.Logger) (*memstore.MemStore, http.Handler, error) {
+func build(keysPath, onionKeyPath string, logger *log.Logger) (*memstore.MemStore, http.Handler, error) {
 	keys, err := auth.LoadServerKeys(keysPath)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	var onionKey ed25519.PrivateKey
+	if onionKeyPath != "" {
+		onionKey, err = tor.LoadOnionKey(onionKeyPath)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	powSecret := make([]byte, 32)
@@ -44,8 +54,13 @@ func build(keysPath string, logger *log.Logger) (*memstore.MemStore, http.Handle
 	}
 	st := memstore.New()
 
+	authServer := auth.NewServer(keys)
+	if onionKey != nil {
+		authServer.SetOnionKey(onionKey)
+	}
+
 	svc := service.New(service.Config{
-		Auth:      auth.NewServer(keys),
+		Auth:      authServer,
 		Store:     st,
 		PowSecret: powSecret,
 	})
@@ -60,6 +75,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
 	keysPath := fs.String("keys", "server-keys.json", "path of the server key file")
 	initKeys := fs.Bool("init-keys", false, "create the key file and exit")
+	onionKeyPath := fs.String("onion-key", "", "path to a Tor hs_ed25519_secret_key file; when set, the OPAQUE public key is signed with it")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -77,7 +93,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	logger := log.New(stderr, "", log.LstdFlags)
 
-	st, handler, err := build(*keysPath, logger)
+	st, handler, err := build(*keysPath, *onionKeyPath, logger)
 	if err != nil {
 		return err
 	}

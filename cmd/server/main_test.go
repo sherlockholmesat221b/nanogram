@@ -40,7 +40,7 @@ func TestInitKeysCreatesAFileOnlyOnce(t *testing.T) {
 func TestBuildRefusesMissingAndOpenKeyFiles(t *testing.T) {
 	dir := t.TempDir()
 
-	if _, _, err := build(filepath.Join(dir, "missing.json"), nil); err == nil {
+	if _, _, err := build(filepath.Join(dir, "missing.json"), "", nil); err == nil {
 		t.Fatal("a missing key file was accepted")
 	}
 
@@ -53,7 +53,7 @@ func TestBuildRefusesMissingAndOpenKeyFiles(t *testing.T) {
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := build(path, nil); err == nil {
+	if _, _, err := build(path, "", nil); err == nil {
 		t.Fatal("a key file readable by others was accepted")
 	}
 }
@@ -65,7 +65,7 @@ func TestBuiltHandlerAnswersInJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, handler, err := build(path, nil)
+	_, handler, err := build(path, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

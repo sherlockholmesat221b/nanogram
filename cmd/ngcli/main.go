@@ -167,6 +167,10 @@ func register(ctx context.Context, o options) error {
 		return err
 	}
 
+	for _, w := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
 	// How to hand over the recovery phrase safely is still undecided. For now
 	// it is shown on the terminal once, and never written anywhere.
 	fmt.Println("RECOVERY PHRASE: STORE OFFLINE.")
@@ -363,28 +367,50 @@ func pinServer(ctx context.Context, o options) error {
 	}
 	fp := client.Fingerprint(info.PublicKey)
 
+	onionWarning, onionErr := client.CheckOnion(o.server, info.PublicKey, info.OnionSignature)
+
+	var onionStatus string
+	switch {
+	case onionErr != nil:
+		onionStatus = "INVALID (signature does not match the .onion address)"
+	case onionWarning != "":
+		onionStatus = "not signed (operator has not configured -onion-key)"
+	case len(info.OnionSignature) > 0:
+		onionStatus = "verified (signature matches the .onion address)"
+	default:
+		onionStatus = "not applicable (not a .onion address)"
+	}
+
 	if o.accept {
+		if onionErr != nil {
+			return fmt.Errorf("refusing to pin: %w", onionErr)
+		}
 		if err := pins.Put(info.PublicKey); err != nil {
 			return err
 		}
 		fmt.Printf("Pinned: %s\n", fp)
+		fmt.Printf("Onion:  %s\n", onionStatus)
 		fmt.Println("Confirm this matches the fingerprint published by the operator.")
 		return nil
 	}
 
+	fmt.Printf("Server:      %s\n", o.server)
+	fmt.Printf("Fingerprint: %s\n", fp)
+	fmt.Printf("Onion:       %s\n", onionStatus)
+
 	if pinned, ok := pins.Get(); ok {
 		existing := client.Fingerprint(pinned)
-		switch {
-		case existing == fp:
-			fmt.Printf("Pinned: %s (matches the server)\n", existing)
-		default:
-			fmt.Printf("WARNING: pinned is %s but the server presents %s\n", existing, fp)
-			fmt.Println("If the change is unexpected, do not proceed. If it is expected, run 'ngcli pin --accept'.")
+		if existing == fp {
+			fmt.Printf("Pinned:      %s (matches)\n", existing)
+		} else {
+			fmt.Printf("Pinned:      %s (MISMATCH)\n", existing)
+			fmt.Println("If the change is expected, run 'ngcli pin --accept'. Otherwise do not proceed.")
 		}
 	} else {
-		fmt.Printf("Not pinned. Server presents: %s\n", fp)
-		fmt.Println("If this matches the fingerprint published by the operator, run 'ngcli pin --accept'.")
+		fmt.Println("Pinned:      no")
+		fmt.Println("If the fingerprint matches the operator's published one, run 'ngcli pin --accept'.")
 	}
+
 	return nil
 }
 
